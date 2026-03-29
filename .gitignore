@@ -210,3 +210,5 @@ __marimo__/
 # Folders from project
 .claude
 data/
+.qdrant_data/
+CLAUDE.md
