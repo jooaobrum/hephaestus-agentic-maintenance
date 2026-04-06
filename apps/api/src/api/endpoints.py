@@ -29,6 +29,7 @@ def chat(request: Request, payload: RAGRequest) -> RAGResponse:
         collection_name=config.QDRANT_COLLECTION,
         query=payload.query,
         embedding_model=config.EMBEDDING_MODEL,
+        keyword_model=config.KEYWORD_MODEL,
         generation_model=config.GENERATION_MODEL,
     )
     logger.info("Chat response generated successfully.")

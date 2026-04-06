@@ -179,6 +179,7 @@ dependencies = [
     { name = "openai" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
+    { name = "pyyaml" },
     { name = "qdrant-client" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -192,6 +193,7 @@ requires-dist = [
     { name = "openai", specifier = ">=2.15.0" },
     { name = "pydantic-settings", specifier = ">=2.12.0" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "qdrant-client", specifier = ">=1.17.1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34.0" },
 ]
