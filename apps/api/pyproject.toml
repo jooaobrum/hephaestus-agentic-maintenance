@@ -10,6 +10,8 @@ dependencies = [
     "qdrant-client>=1.17.1",
     "uvicorn[standard]>=0.34.0",
     "langsmith>=0.7.22",
+    "instructor>=1.14.5",
+    "cohere>=5.21.1",
 ]
 
 [tool.uv]
