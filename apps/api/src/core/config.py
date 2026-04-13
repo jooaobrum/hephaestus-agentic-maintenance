@@ -18,9 +18,6 @@ class Settings(BaseSettings):
     TOP_N: int = 20
     TOP_K: int = 10
     PROMPTS_PATH: Path = Path(__file__).parent.parent / "agents" / "prompts" / "retrieval_generation.yml"
-    PROMPT_NAME: str = "retrieval_generation"
-    INTENT_ROUTER_PROMPTS_PATH: Path = Path(__file__).parent.parent / "agents" / "prompts" / "intent_router.yml"
-    INTENT_ROUTER_PROMPT_NAME: str = "intent_router"
 
     model_config = SettingsConfigDict(
         env_file=(_ROOT / ".env", ".env"), env_file_encoding="utf-8", extra="ignore"

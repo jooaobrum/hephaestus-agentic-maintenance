@@ -13,10 +13,8 @@ from agents.utils.prompt_management import prompt_template_config
 
 
 # --- Prompts ---
-AGENT_PROMPT = prompt_template_config(config.PROMPTS_PATH, config.PROMPT_NAME).render()
-INTENT_ROUTER_PROMPT = prompt_template_config(
-    config.INTENT_ROUTER_PROMPTS_PATH, config.INTENT_ROUTER_PROMPT_NAME
-).render()
+AGENT_PROMPT = prompt_template_config(config.PROMPTS_PATH, "retrieval_generation").render()
+INTENT_ROUTER_PROMPT = prompt_template_config(config.PROMPTS_PATH, "intent_router").render()
 
 
 # --- Response Models ---
