@@ -1,180 +1,257 @@
+from typing import Any, Annotated, List, Union
+from operator import add
+
+import yaml
+import cohere
+
 from openai import OpenAI
+
+from pydantic import BaseModel, Field
+
+from langchain_openai import ChatOpenAI
+from langchain_core.tools import tool
+from langchain_core.messages import ToolMessage, SystemMessage
+
+from langgraph.graph import StateGraph, START, END
+from langgraph.prebuilt import ToolNode
+
+from langsmith import traceable
+
 from qdrant_client import QdrantClient, models
 
 from core.config import config
 
-from langsmith import traceable, get_current_run_tree
 
-import instructor
+# --- Prompts ---
+with open(config.PROMPTS_PATH) as f:
+    AGENT_PROMPT = yaml.safe_load(f)["prompts"][config.PROMPT_NAME]
 
-from pydantic import BaseModel, Field
+with open(config.INTENT_ROUTER_PROMPTS_PATH) as f:
+    INTENT_ROUTER_PROMPT = yaml.safe_load(f)["prompts"][config.INTENT_ROUTER_PROMPT_NAME]
 
-import cohere
 
-from agents.utils.promp_management import prompt_template_config
-
+# --- Clients ---
 openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
 cohere_client = cohere.Client(api_key=config.CO_API_KEY)
+qdrant_client = QdrantClient(url=config.QDRANT_URL)
 
+
+# --- Data Models ---
 
 class RAGUsedContext(BaseModel):
-    id: int = Field("ID of the intervention")
-    machine: str = Field("Machine of the intervention")
-    date_start: str = Field("Date of the intervention")
-    summary: str = Field("Summary of the intervention")
+    id: Union[int, str] = Field(description="ID of the intervention")
+    machine: str = Field(description="Machine of the intervention")
+    date_start: str = Field(description="Date of the intervention")
+    summary: str = Field(description="Summary of the intervention")
 
 
-class RAGGenerationResponse(BaseModel):
-    answer: str = Field("Answer to the question")
-    references: list[RAGUsedContext] = Field(
-        "List of problems that answer the question"
-    )
+class FinalResponse(BaseModel):
+    answer: str = Field(description="Answer to the question")
+    references: list[RAGUsedContext] = Field(description="List of contexts used to answer the question")
 
+
+class IntentRouterResponse(BaseModel):
+    question_relevant: bool
+    answer: str
+
+
+class State(BaseModel):
+    messages: Annotated[List[Any], add] = []
+    question_relevant: bool = False
+    iteration: int = 0
+    answer: str = ""
+    final_answer: bool = False
+    references: Annotated[List[RAGUsedContext], add] = []
+
+
+# --- Retrieval helpers ---
 
 @traceable(name="embed_query", run_type="embedding")
-def embed_text(text: str, model: str = "text-embedding-3-small") -> list[float]:
-
-    response = openai_client.embeddings.create(input=text, model=model)
-
-    run = get_current_run_tree()
-    if run:
-        run.metadata["embedding_model"] = model
-        run.metadata["usage_metadata"] = {
-            "prompt_tokens": response.usage.prompt_tokens,
-            "total_tokens": response.usage.total_tokens,
-        }
-
+def embed_text(text: str) -> list[float]:
+    response = openai_client.embeddings.create(input=text, model=config.EMBEDDING_MODEL)
     return response.data[0].embedding
 
 
 @traceable(name="data_retrieval", run_type="retriever")
-def retrieve_data(
-    client: QdrantClient,
-    collection_name: str,
-    query: str,
-    embedding_model: str = "text-embedding-3-small",
-    keyword_model: str = "bm25",
-    top_k: int = 5,
-) -> list[dict]:
-    run = get_current_run_tree()
-    if run:
-        run.metadata["embedding_model"] = embedding_model
-
-    query_vector = embed_text(query, embedding_model)
-    search_results = client.query_points(
-        collection_name=collection_name,
+def retrieve_data(query: str, top_k: int = 5) -> list[dict]:
+    query_vector = embed_text(query)
+    search_results = qdrant_client.query_points(
+        collection_name=config.QDRANT_COLLECTION,
         prefetch=[
+            models.Prefetch(query=query_vector, using=config.EMBEDDING_MODEL, limit=top_k // 2),
             models.Prefetch(
-                query=query_vector, using=embedding_model, limit=top_k // 2
-            ),
-            models.Prefetch(
-                query=models.Document(text=query, model="qdrant/" + keyword_model),
-                using=keyword_model,
+                query=models.Document(text=query, model="qdrant/" + config.KEYWORD_MODEL),
+                using=config.KEYWORD_MODEL,
                 limit=top_k // 2,
             ),
         ],
         query=models.RrfQuery(rrf=models.Rrf(weights=[1, 1])),
         limit=top_k,
     ).points
-
-    return [
-        {"id": point.id, "payload": point.payload, "score": point.score}
-        for point in search_results
-    ]
+    return [{"id": point.id, "payload": point.payload, "score": point.score} for point in search_results]
 
 
 @traceable(name="reranking", run_type="retriever")
-def rerank_results(
-    query: str,
-    results: list[dict],
-    model: str = "rerank-v4.0-pro",
-    top_k: int = 5,
-) -> list[dict]:
-
+def rerank_results(query: str, results: list[dict], top_k: int = 5) -> list[dict]:
+    if not results:
+        return []
     contexts = [result["payload"]["summary"] for result in results]
-
     response = cohere_client.rerank(
-        model=model, query=query, documents=contexts, top_n=top_k
+        model=config.RERANKING_MODEL, query=query, documents=contexts, top_n=top_k
     )
-
-    reranked_response = [results[res.index] for res in response.results]
-
-    return reranked_response
+    return [results[res.index] for res in response.results]
 
 
-@traceable(name="format_context", run_type="prompt")
+@traceable(name="format_cm_context", run_type="prompt")
 def format_context(results: list[dict]) -> str:
     context = ""
     for result in results:
         payload = result["payload"]
-        context += f"ID: {payload.get('id', 'N/A')}\n"
-        context += f"Machine: {payload.get('machine', 'N/A')}\n"
-        context += f"Date: {payload.get('date_start', 'N/A')}\n"
-        context += f"Summary: {payload.get('summary', 'N/A')}\n"
-        context += "-" * 40 + "\n"
+        context += (
+            f"ID: {payload.get('id', 'N/A')}\n"
+            f"Machine: {payload.get('machine', 'N/A')}\n"
+            f"Date: {payload.get('date_start', 'N/A')}\n"
+            f"Summary: {payload.get('summary', 'N/A')}\n"
+            + "-" * 40 + "\n"
+        )
     return context
 
 
-@traceable(name="build_prompt", run_type="prompt")
-def build_prompt(context: str, query: str) -> str:
-    prompt_template = prompt_template_config(str(config.PROMPTS_PATH), config.PROMPT_NAME)
+@tool
+def get_formatted_cm_context(query: str, top_n: int = 10, top_k: int = 5) -> str:
+    """Retrieve and rerank documents for a query, returning formatted context.
 
-    return prompt_template.render(context=context, query=query)
+    Performs hybrid retrieval (dense + BM25) from Qdrant, reranks the candidates
+    with Cohere, and returns them as a readable string.
+
+    Args:
+        query: The search query string.
+        top_n: Number of candidates to retrieve before reranking. Defaults to 10.
+        top_k: Number of results to keep after reranking. Defaults to 5.
+
+    Returns:
+        A formatted string with the top-k reranked intervention records,
+        each showing ID, machine, date, and summary.
+    """
+    results = retrieve_data(query, top_k=top_n)
+    reranked_results = rerank_results(query, results, top_k=top_k)
+    return format_context(reranked_results)
 
 
-@traceable(name="generate_answer", run_type="llm")
-def generate_answer(prompt: str, generation_model: str = "gpt-5.4-nano"):
+# --- Module-level LLM setup — single source of truth ---
 
-    client = instructor.from_provider(
-        "openai/gpt-5.4-nano", mode=instructor.Mode.RESPONSES_TOOLS
-    )
+RETRIEVAL_TOOLS = [get_formatted_cm_context]
 
-    response, raw_response = client.create_with_completion(
-        messages=[{"role": "system", "content": prompt}],
-        reasoning={"effort": "low"},
-        response_model=RAGGenerationResponse,
-    )
+_llm = ChatOpenAI(model=config.GENERATION_MODEL)
+_llm_with_tools = _llm.bind_tools(RETRIEVAL_TOOLS, tool_choice="auto")
+_llm_structured = _llm.with_structured_output(FinalResponse)
+_llm_intent = _llm.with_structured_output(IntentRouterResponse)
 
-    run = get_current_run_tree()
-    if run:
-        run.metadata["ls_model_name"] = generation_model
-        run.metadata["ls_model_type"] = "chat"
-        run.metadata["usage_metadata"] = {
-            "input_tokens": raw_response.usage.input_tokens,
-            "output_tokens": raw_response.usage.output_tokens,
-            "total_tokens": raw_response.usage.total_tokens,
+
+# --- Graph nodes ---
+
+def tool_router(state: State) -> str:
+    if state.final_answer:
+        return "end"
+    if state.iteration > 2:
+        return "end"
+    last_message = state.messages[-1]
+    if hasattr(last_message, "tool_calls") and len(last_message.tool_calls) > 0:
+        return "tools"
+    return "end"
+
+
+@traceable(
+    name="agent_node",
+    run_type="llm",
+    metadata={"ls_provider": "openai", "ls_model_name": config.GENERATION_MODEL},
+)
+def agent_node(state: State) -> dict:
+    system_message = SystemMessage(content=AGENT_PROMPT)
+    messages = state.messages
+
+    has_tool_results = any(isinstance(m, ToolMessage) for m in messages)
+    last_message = messages[-1] if messages else None
+    last_has_pending_tool_calls = last_message is not None and hasattr(last_message, "tool_calls") and len(last_message.tool_calls) > 0
+
+    if has_tool_results and not last_has_pending_tool_calls:
+        response: FinalResponse = _llm_structured.invoke([system_message, *messages])
+        return {
+            "messages": [],
+            "iteration": state.iteration + 1,
+            "answer": response.answer,
+            "final_answer": True,
+            "references": response.references,
+        }
+    else:
+        response = _llm_with_tools.invoke([system_message, *messages])
+        return {
+            "messages": [response],
+            "iteration": state.iteration + 1,
+            "answer": "",
+            "final_answer": False,
+            "references": [],
         }
 
-    return response, raw_response
 
+@traceable(
+    name="intent_router_node",
+    run_type="llm",
+    metadata={"ls_provider": "openai", "ls_model_name": config.GENERATION_MODEL},
+)
+def intent_router_node(state: State) -> dict:
+    response: IntentRouterResponse = _llm_intent.invoke([
+        SystemMessage(content=INTENT_ROUTER_PROMPT),
+        *state.messages,
+    ])
 
-@traceable(name="rag_pipeline")
-def rag_pipeline(
-    client: QdrantClient,
-    collection_name: str,
-    query: str,
-    embedding_model: str = "text-embedding-3-small",
-    keyword_model: str = "bm25",
-    generation_model: str = "gpt-5.4-nano",
-    top_n: int = 5,
-    top_k: int = 5,
-) -> dict:
-    results = retrieve_data(
-        client, collection_name, query, embedding_model, keyword_model, top_n
-    )
-    reranked_results = rerank_results(query, results, config.RERANKING_MODEL, top_k)
-    context = format_context(reranked_results)
-    prompt = build_prompt(context, query)
-    answer, raw_answer = generate_answer(prompt, generation_model)
-
-    final_answer = {
-        "data_object": answer,
-        "answer": answer.answer,
-        "references": answer.references,
-        "query": query,
-        "retrieved_context_ids": [result["payload"].get("id") for result in results],
-        "retrieved_context": context,
-        "similarity_score": [result["score"] for result in results],
+    return {
+        "question_relevant": response.question_relevant,
+        "answer": response.answer,
     }
 
-    return final_answer
+
+def intent_router_conditional_edges(state: State) -> str:
+    if state.question_relevant:
+        return "agent_node"
+    else:
+        return "end"
+
+
+# --- Build & compile graph (once at module load) ---
+
+_tools = [get_formatted_cm_context]
+_tool_node = ToolNode(_tools)
+
+_workflow = StateGraph(State)
+_workflow.add_node("tool_node", _tool_node)
+_workflow.add_node("intent_router_node", intent_router_node)
+_workflow.add_node("agent_node", agent_node)
+
+_workflow.add_edge(START, "intent_router_node")
+_workflow.add_conditional_edges(
+    "intent_router_node",
+    intent_router_conditional_edges,
+    {"agent_node": "agent_node", "end": END},
+)
+_workflow.add_conditional_edges(
+    "agent_node",
+    tool_router,
+    {"tools": "tool_node", "end": END},
+)
+_workflow.add_edge("tool_node", "agent_node")
+
+graph = _workflow.compile()
+
+
+# --- Public entry point ---
+
+@traceable(name="agentic_rag_pipeline")
+def agentic_rag_pipeline(query: str) -> dict:
+    initial_state = {"messages": [{"role": "user", "content": query}]}
+    result = graph.invoke(initial_state)
+    return {
+        "answer": result["answer"],
+        "references": result["references"],
+        "question_relevant": result["question_relevant"],
+    }
