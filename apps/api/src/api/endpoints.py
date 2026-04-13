@@ -1,19 +1,15 @@
 import logging
 
 from fastapi import APIRouter, Request
-from qdrant_client import QdrantClient
 
 from api.models import RAGRequest, RAGResponse
-from agents.retrieval_generation import rag_pipeline
-from core.config import config
+from agents.retrieval_generation import agentic_rag_pipeline
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 
 logger = logging.getLogger(__name__)
-
-qdrant_client = QdrantClient(url=config.QDRANT_URL)
 
 rag_router = APIRouter()
 
@@ -24,19 +20,10 @@ def chat(request: Request, payload: RAGRequest) -> RAGResponse:
     Endpoint to handle chat requests.
     """
     logger.info("Received a chat request.")
-    result = rag_pipeline(
-        client=qdrant_client,
-        collection_name=config.QDRANT_COLLECTION,
-        query=payload.query,
-        embedding_model=config.EMBEDDING_MODEL,
-        keyword_model=config.KEYWORD_MODEL,
-        generation_model=config.GENERATION_MODEL,
-    )
+    result = agentic_rag_pipeline(query=payload.query)
     logger.info("Chat response generated successfully.")
-    logger.info(f"Chat response: {result}")
 
-    answer = result["answer"]
-    return RAGResponse(answer=answer)
+    return RAGResponse(answer=result["answer"], references=[ref.model_dump() for ref in result["references"]])
 
 
 api_router = APIRouter()
