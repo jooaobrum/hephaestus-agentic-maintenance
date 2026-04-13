@@ -1,7 +1,5 @@
 from typing import Union
 
-import yaml
-
 from pydantic import BaseModel, Field
 
 from langchain_openai import ChatOpenAI
@@ -11,16 +9,18 @@ from langsmith import traceable
 from core.config import config
 from agents.tools import get_formatted_cm_context
 
+from agents.utils.prompt_management import prompt_template_config
+
 
 # --- Prompts ---
-with open(config.PROMPTS_PATH) as f:
-    AGENT_PROMPT = yaml.safe_load(f)["prompts"][config.PROMPT_NAME]
-
-with open(config.INTENT_ROUTER_PROMPTS_PATH) as f:
-    INTENT_ROUTER_PROMPT = yaml.safe_load(f)["prompts"][config.INTENT_ROUTER_PROMPT_NAME]
+AGENT_PROMPT = prompt_template_config(config.PROMPTS_PATH, config.PROMPT_NAME).render()
+INTENT_ROUTER_PROMPT = prompt_template_config(
+    config.INTENT_ROUTER_PROMPTS_PATH, config.INTENT_ROUTER_PROMPT_NAME
+).render()
 
 
 # --- Response Models ---
+
 
 class RAGUsedContext(BaseModel):
     id: Union[int, str] = Field(description="ID of the intervention")
@@ -31,7 +31,9 @@ class RAGUsedContext(BaseModel):
 
 class FinalResponse(BaseModel):
     answer: str = Field(description="Answer to the question")
-    references: list[RAGUsedContext] = Field(description="List of contexts used to answer the question")
+    references: list[RAGUsedContext] = Field(
+        description="List of contexts used to answer the question"
+    )
 
 
 class IntentRouterResponse(BaseModel):
@@ -50,6 +52,7 @@ _llm_intent = _llm.with_structured_output(IntentRouterResponse)
 
 
 # --- Nodes ---
+
 
 @traceable(
     name="agent_node",
@@ -94,10 +97,12 @@ def agent_node(state) -> dict:
     metadata={"ls_provider": "openai", "ls_model_name": config.GENERATION_MODEL},
 )
 def intent_router_node(state) -> dict:
-    response: IntentRouterResponse = _llm_intent.invoke([
-        SystemMessage(content=INTENT_ROUTER_PROMPT),
-        *state.messages,
-    ])
+    response: IntentRouterResponse = _llm_intent.invoke(
+        [
+            SystemMessage(content=INTENT_ROUTER_PROMPT),
+            *state.messages,
+        ]
+    )
     return {
         "question_relevant": response.question_relevant,
         "answer": response.answer,
