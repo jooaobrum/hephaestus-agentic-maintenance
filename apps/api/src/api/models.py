@@ -5,15 +5,35 @@ from pydantic import BaseModel, Field
 
 class RAGRequest(BaseModel):
     query: str
+    thread_id: str
 
 
-class RAGUsedContext(BaseModel):
-    id: Union[int, str] = Field(description="ID of the intervention")
-    machine: str = Field(description="Machine of the intervention")
-    date_start: str = Field(description="Date of the intervention")
-    summary: str = Field(description="Summary of the intervention")
+class UsedReference(BaseModel):
+    source_type: str = Field(
+        description="Type of source: 'intervention', 'procedure', 'sensor', or 'component_life'"
+    )
+    id: str = Field(
+        description="Identifier — intervention ID (e.g. INT-2023-0070), procedure section, sensor tag, or component ID"
+    )
+    machine: str = Field(default="", description="Machine ID (e.g. HX-200)")
+    detail: str = Field(
+        default="",
+        description="Short summary: intervention summary, procedure title, sensor reading, or component condition",
+    )
 
 
 class RAGResponse(BaseModel):
     answer: str
-    references: list[RAGUsedContext] = []
+    references: list[UsedReference] = []
+    trace_id: str
+
+
+class FeedbackRequest(BaseModel):
+    trace_id: str
+    feedback_value: int
+    feedback_text: str
+
+
+class FeedbackResponse(BaseModel):
+    status: str
+    message: str

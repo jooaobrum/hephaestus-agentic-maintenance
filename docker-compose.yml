@@ -33,9 +33,12 @@ services:
       - .env
     environment:
       - QDRANT_URL=http://qdrant:6333
+      - PG_URL=postgresql://langgraph_user:langgraph_password@postgres:5432/langgraph_db
     depends_on:
       qdrant:
         condition: service_healthy
+      postgres:
+        condition: service_started
     restart: unless-stopped
     volumes:
       - ./apps/api/src:/app/apps/api/src
@@ -56,6 +59,38 @@ services:
     restart: unless-stopped
     volumes:
       - ./apps/chatbot_ui:/app/apps/chatbot_ui
+
+  # ── Postgres ──────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - 5433:5432
+    environment:
+      POSTGRES_DB: langgraph_db
+      POSTGRES_USER: langgraph_user
+      POSTGRES_PASSWORD: langgraph_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    restart: unless-stopped
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+
+    # ── MCP ──────────────────────────────────────────────────────────
+  db-mcp-server:
+    build:
+      context: .
+      dockerfile: apps/db_mcp_server/Dockerfile
+    ports:
+      - 8001:8001
+    env_file:
+      - .env
+    environment:
+      - PG_URL=postgresql://langgraph_user:langgraph_password@postgres:5432/langgraph_db
+    depends_on:
+      postgres:
+        condition: service_started
+    restart: unless-stopped
+    volumes:
+      - ./apps/db_mcp_server/src:/app/apps/db_mcp_server/src
 
 networks:
   default:

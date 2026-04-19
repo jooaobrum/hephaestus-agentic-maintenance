@@ -1,13 +1,12 @@
 from core.config import config
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api.endpoints import api_router
+from api.endpoints import api_router, feedback_router
 
 import logging
 
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 
 logger = logging.getLogger(__name__)
@@ -23,3 +22,4 @@ app.add_middleware(
 )
 
 app.include_router(api_router)
+app.include_router(feedback_router)

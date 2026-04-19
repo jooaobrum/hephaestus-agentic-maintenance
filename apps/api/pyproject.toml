@@ -16,6 +16,12 @@ dependencies = [
     "langchain-openai>=0.3.0",
     "langgraph>=0.4.0",
     "jinja2>=3.1.0",
+    "psycopg[binary]>=3.3.3",
+    "langgraph-checkpoint-postgres>=3.0.5",
+    "sqlalchemy>=2.0.48",
+    "pandas>=2.3.3",
+    "psycopg2-binary>=2.9.11",
+    "tabulate>=0.10.0",
 ]
 
 [tool.uv]

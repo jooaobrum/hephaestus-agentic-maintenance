@@ -1,0 +1,26 @@
+[project]
+name = "db-mcp-server"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "jooaobrum" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastmcp>=3.2.4",
+    "openai>=2.30.0",
+    "pandas>=2.3.3",
+    "psycopg2-binary>=2.9.11",
+    "pydantic>=2.12.5",
+    "pydantic-settings>=2.13.1",
+    "tabulate>=0.10.0",
+    "sqlalchemy>=2.0.48",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/db_mcp_server"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

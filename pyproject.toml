@@ -20,7 +20,14 @@ dependencies = [
     "ragas>=0.4.3",
     "instructor>=1.14.5",
     "cohere>=5.21.1",
+    "langgraph-checkpoint-postgres>=3.0.5",
+    "psycopg[binary]>=3.3.3",
+    "mistralai>=2.4.0",
+    "psycopg2-binary>=2.9.11",
+    "tabulate>=0.10.0",
+    "fastmcp>=3.2.4",
+    "langchain-mcp-adapters>=0.2.2",
 ]
 
 [tool.uv.workspace]
-members = ["apps/api", "apps/chatbot_ui"]
+members = ["apps/api", "apps/chatbot_ui", "apps/db_mcp_server"]
