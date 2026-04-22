@@ -205,7 +205,7 @@ def get_remaining_life(machine: str) -> str:
 
 
 @tool
-def get_formatted_cm_context(query: str, top_n: int = 10) -> str:
+def get_formatted_cm_context(query: str) -> str:
     """Retrieve past corrective maintenance intervention records for a query.
 
     Searches the maintenance history database using hybrid retrieval (dense + BM25).
@@ -213,17 +213,16 @@ def get_formatted_cm_context(query: str, top_n: int = 10) -> str:
 
     Args:
         query: The search query string describing the issue or machine.
-        top_n: Number of results to retrieve. Defaults to 10.
 
     Returns:
         A formatted string with intervention records showing ID, machine, date, and summary.
     """
-    results = _retrieve_cm(query, top_k=top_n)
+    results = _retrieve_cm(query, top_k=10)
     return _format_cm_context(results)
 
 
 @tool
-def get_formatted_procedure_context(query: str, top_n: int = 10) -> str:
+def get_formatted_procedure_context(query: str) -> str:
     """Retrieve troubleshooting procedure documentation for a query.
 
     Searches the procedures knowledge base (extracted from machine troubleshooting PDFs).
@@ -231,12 +230,11 @@ def get_formatted_procedure_context(query: str, top_n: int = 10) -> str:
 
     Args:
         query: The search query string describing the fault or procedure needed.
-        top_n: Number of results to retrieve. Defaults to 10.
 
     Returns:
         A formatted string with procedure chunks showing file, section, context, and text.
     """
-    results = _retrieve_procedures(query, top_k=top_n)
+    results = _retrieve_procedures(query, top_k=10)
     return _format_proc_context(results)
 
 
@@ -290,3 +288,205 @@ def get_remaining_life_tool(machine: str) -> str:
         A markdown table with component life data.
     """
     return get_remaining_life(machine)
+
+
+@traceable(name="sensor_timeline_retrieval", run_type="retriever")
+def get_sensor_timeline(
+    machine: str,
+    start_date: str,
+    end_date: str,
+    tag: str,
+) -> str:
+    """Return sensor readings with trend analysis for detecting failure onset."""
+    query = text("""
+        SELECT timestamp, tag, sensor_name, value, unit, status, warn_lo, warn_hi
+        FROM maintenance.sensor_readings
+        WHERE machine = :machine
+          AND tag = :tag
+          AND timestamp >= :start_date
+          AND timestamp <= :end_date
+        ORDER BY timestamp
+    """)
+    params = {"machine": machine, "tag": tag, "start_date": start_date, "end_date": end_date}
+
+    with pg_engine.connect() as conn:
+        df = pd.read_sql(query, conn, params=params)
+
+    if df.empty:
+        return f"No readings found for {tag} on {machine} between {start_date} and {end_date}."
+
+    df["value_prev"] = df["value"].shift(1)
+    df["delta"] = df["value"] - df["value_prev"]
+    df["trend"] = df["delta"].apply(lambda x: "↑" if x > 0 else ("↓" if x < 0 else "→"))
+
+    def mark_anomaly(row):
+        if row["status"] in ["WARNING", "CRITICAL"]:
+            return f"⚠️ {row['status']}"
+        return row["status"]
+
+    df["status_marked"] = df.apply(mark_anomaly, axis=1)
+
+    anomalies = df[df["status"].isin(["WARNING", "CRITICAL"])]
+    summary = ""
+    if not anomalies.empty:
+        first_anomaly = anomalies.iloc[0]
+        summary += (
+            f"\nFirst threshold breach: {first_anomaly['timestamp']} "
+            f"(value={first_anomaly['value']}, status={first_anomaly['status']})\n"
+        )
+        if len(df) > 1:
+            max_delta = df["delta"].max()
+            min_delta = df["delta"].min()
+            summary += f"**Trend:** max increase {max_delta:.2f}/reading, max decrease {min_delta:.2f}/reading\n"
+
+    display_df = df[["timestamp", "tag", "sensor_name", "value", "unit", "trend", "status_marked", "warn_lo", "warn_hi"]].copy()
+    display_df.columns = ["Timestamp", "Tag", "Sensor", "Value", "Unit", "Trend", "Status", "Warn Low", "Warn High"]
+
+    return f"**Sensor Timeline for {tag}:**\n{summary}\n{display_df.to_markdown(index=False)}"
+
+
+@tool
+def get_sensor_timeline_tool(
+    machine: str,
+    start_date: str,
+    end_date: str,
+    tag: str,
+) -> str:
+    """Return sensor readings with trend analysis for detecting failure onset.
+
+    Args:
+        machine: Machine ID (e.g. 'HX-200').
+        start_date: Start of window (ISO format, e.g. '2024-12-01').
+        end_date: End of window (ISO format, e.g. '2024-12-18').
+        tag: Sensor tag to retrieve (e.g. 'HX-200-OIL-TEMP').
+
+    Returns:
+        A formatted string with timeline and trend analysis.
+    """
+    return get_sensor_timeline(machine, start_date, end_date, tag)
+
+
+@traceable(name="threshold_events_retrieval", run_type="retriever")
+def get_threshold_events(
+    machine: str,
+    timestamp_start: str,
+    timestamp_end: str,
+) -> str:
+    """Return all sensor readings that crossed warning or critical thresholds."""
+    query = text("""
+        SELECT timestamp, tag, sensor_name, value, unit, status, warn_lo, warn_hi
+        FROM maintenance.sensor_readings
+        WHERE machine = :machine
+          AND timestamp >= :timestamp_start
+          AND timestamp <= :timestamp_end
+          AND status IN ('WARNING', 'CRITICAL')
+        ORDER BY timestamp DESC
+    """)
+    params = {"machine": machine, "timestamp_start": timestamp_start, "timestamp_end": timestamp_end}
+
+    with pg_engine.connect() as conn:
+        df = pd.read_sql(query, conn, params=params)
+
+    if df.empty:
+        return f"No threshold breaches found for {machine} between {timestamp_start} and {timestamp_end}."
+
+    def classify_breach(row):
+        if row["status"] == "CRITICAL":
+            if row["value"] < row["warn_lo"]:
+                return f"BELOW warn_lo ({row['warn_lo']})"
+            else:
+                return f"ABOVE warn_hi ({row['warn_hi']})"
+        elif row["status"] == "WARNING":
+            if row["value"] < row["warn_lo"]:
+                return f"BELOW warn_lo ({row['warn_lo']})"
+            else:
+                return f"ABOVE warn_hi ({row['warn_hi']})"
+        return ""
+
+    df["breach_type"] = df.apply(classify_breach, axis=1)
+
+    critical_count = len(df[df["status"] == "CRITICAL"])
+    warning_count = len(df[df["status"] == "WARNING"])
+    unique_tags = df["tag"].nunique()
+    summary = f"**Summary:** {critical_count} CRITICAL events, {warning_count} WARNING events across {unique_tags} unique sensors\n"
+
+    display_df = df[["timestamp", "tag", "sensor_name", "value", "unit", "breach_type"]].copy()
+    display_df.columns = ["Timestamp", "Tag", "Sensor", "Value", "Unit", "Breach Type"]
+
+    return f"{summary}\n{display_df.to_markdown(index=False)}"
+
+
+@tool
+def get_threshold_events_tool(
+    machine: str,
+    timestamp_start: str,
+    timestamp_end: str,
+) -> str:
+    """Return all sensor readings that crossed warning or critical thresholds.
+
+    Use this to identify when sensors first breached their thresholds and correlate multiple breaches.
+
+    Args:
+        machine: Machine ID (e.g. 'HX-200').
+        timestamp_start: Start of window (ISO format, e.g. '2024-12-01').
+        timestamp_end: End of window (ISO format, e.g. '2024-12-18').
+
+    Returns:
+        A formatted string with threshold breach events, counts, and breach types.
+    """
+    return get_threshold_events(machine, timestamp_start, timestamp_end)
+
+
+@tool
+def get_current_date() -> str:
+    """Get today's date in ISO format (YYYY-MM-DD).
+
+    Use this at the start of queries that need relative date windows (e.g., "last 7 days").
+
+    Returns:
+        Today's date as a string in ISO format.
+    """
+    from datetime import datetime
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+@tool
+def calculate_date_window(reference_date: str, days_back: int) -> str:
+    """Calculate a date window relative to a reference date for sensor/intervention queries.
+
+    Use this to convert user inputs like "last 7 days", "yesterday", "2 weeks ago" into actual date ranges.
+
+    Args:
+        reference_date: A reference date (ISO format, e.g., '2024-12-18').
+        days_back: How many days to go back (e.g., 7 for last 7 days, 1 for yesterday, 14 for 2 weeks).
+
+    Returns:
+        A JSON string with start_date and end_date in ISO format, plus human-readable summary.
+
+    Examples:
+        calculate_date_window('2024-12-18', 7) → {'start': '2024-12-11', 'end': '2024-12-18', 'label': 'last 7 days'}
+        calculate_date_window('2024-12-18', 1) → {'start': '2024-12-17', 'end': '2024-12-18', 'label': 'yesterday to today'}
+    """
+    import json
+    from datetime import datetime, timedelta
+
+    ref_date = datetime.fromisoformat(reference_date)
+    start_date = ref_date - timedelta(days=days_back)
+    end_date = ref_date
+
+    labels = {
+        1: "yesterday to today",
+        7: "last 7 days",
+        14: "last 2 weeks",
+        30: "last month",
+    }
+    label = labels.get(days_back, f"last {days_back} days")
+
+    result = {
+        "start_date": start_date.strftime("%Y-%m-%d"),
+        "end_date": end_date.strftime("%Y-%m-%d"),
+        "label": label,
+        "days_span": days_back,
+    }
+
+    return json.dumps(result)
