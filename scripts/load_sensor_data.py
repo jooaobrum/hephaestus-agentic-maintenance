@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 from sqlalchemy import create_engine, text
 
-DB_URL = "postgresql://langgraph_user:langgraph_password@localhost:5433/langgraph_db"
+DB_URL = "postgresql+psycopg://langgraph_user:langgraph_password@localhost:5433/langgraph_db"
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 SQL_FILE = Path(__file__).resolve().parent / "init_sensor_db.sql"
 
@@ -53,7 +53,16 @@ def main():
     )
     print("  Done.")
 
-    # 5. Recreate indexes (replace drops them)
+    # 5. Load interventions
+    df_int = pd.read_csv(DATA_DIR / "interventions.csv")
+    print(f"Loading interventions ({len(df_int)} rows) ...")
+    df_int.to_sql(
+        "interventions", engine, schema="maintenance",
+        if_exists="replace", index=False,
+    )
+    print("  Done.")
+
+    # 6. Recreate indexes (replace drops them)
     print("Recreating indexes ...")
     with engine.connect() as conn:
         conn.execute(text("""
@@ -63,6 +72,10 @@ def main():
                 ON maintenance.sensor_readings (tag, timestamp);
             CREATE INDEX IF NOT EXISTS idx_remaining_life_machine
                 ON maintenance.remaining_life (machine);
+            CREATE INDEX IF NOT EXISTS idx_interventions_machine_date
+                ON maintenance.interventions (machine, date_start);
+            CREATE INDEX IF NOT EXISTS idx_interventions_type
+                ON maintenance.interventions (intervention_type);
         """))
         conn.commit()
     print("  Done.")

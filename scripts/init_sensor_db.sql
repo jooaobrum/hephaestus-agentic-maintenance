@@ -55,6 +55,28 @@ CREATE TABLE IF NOT EXISTS maintenance.remaining_life (
     notes           TEXT
 );
 
+-- Maintenance interventions log
+CREATE TABLE IF NOT EXISTS maintenance.interventions (
+    id                    TEXT PRIMARY KEY,
+    date_start            TIMESTAMP,
+    date_end              TIMESTAMP,
+    machine               TEXT NOT NULL,
+    machine_type          TEXT,
+    location              TEXT,
+    intervention_type     TEXT,
+    fault_code            TEXT,
+    fault_description     TEXT,
+    severity              TEXT,
+    subsystem             TEXT,
+    priority              TEXT,
+    technician            TEXT,
+    supervisor            TEXT,
+    duration_min          INTEGER,
+    related_intervention  TEXT,
+    events                TEXT,
+    comments              TEXT
+);
+
 -- Indexes for common query patterns
 CREATE INDEX IF NOT EXISTS idx_readings_machine_ts
     ON maintenance.sensor_readings (machine, timestamp);
@@ -64,3 +86,9 @@ CREATE INDEX IF NOT EXISTS idx_readings_tag_ts
 
 CREATE INDEX IF NOT EXISTS idx_remaining_life_machine
     ON maintenance.remaining_life (machine);
+
+CREATE INDEX IF NOT EXISTS idx_interventions_machine_date
+    ON maintenance.interventions (machine, date_start);
+
+CREATE INDEX IF NOT EXISTS idx_interventions_type
+    ON maintenance.interventions (intervention_type);
