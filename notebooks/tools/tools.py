@@ -530,9 +530,20 @@ def _format_proc_context(results: list[dict]) -> str:
     for result in results:
         payload = result["payload"]
         file_name = payload.get('file_name', 'N/A')
-        page_number = payload.get('page_number', payload.get('page', 'N/A'))
+        # Try multiple field names for page number
+        page_number = (
+            payload.get('page_number') or
+            payload.get('page') or
+            payload.get('page_num') or
+            'N/A'
+        )
         chunk_number = payload.get('chunk_number', 'N/A')
-        source_ref = f"PROC_REF:{file_name}:{page_number}:chunk#{chunk_number}"
+
+        # Only include page if it's not N/A
+        if page_number == 'N/A':
+            source_ref = f"PROC_REF:{file_name}:chunk#{chunk_number}"
+        else:
+            source_ref = f"PROC_REF:{file_name}:{page_number}:chunk#{chunk_number}"
 
         context += (
             f"[SOURCE: {source_ref}]\n"

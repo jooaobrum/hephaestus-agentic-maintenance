@@ -127,7 +127,11 @@ prompts:
       → Find ALL H sourced from PROC_REF:cooling-system.pdf:*
       → For each, apply −0.25 (source: USER, reason: "procedure attempted, issue persists")
 
-    **FINAL RULE:** No hypothesis can have conf > 0.0 without at least one source_id in its evidence list. If you create a hypothesis with no source, it is an error.
+    **FINAL RULE - CRITICAL:**
+    - No hypothesis can exist without ≥1 source. EVER.
+    - If you cannot find a [SOURCE: ...] tag in tool output for a hypothesis, DO NOT CREATE IT.
+    - "no sources yet" is NOT allowed. It means you made an error.
+    - Only create hypotheses when you have extracted a [SOURCE: ...] tag from tool output.
 
     ---
 
