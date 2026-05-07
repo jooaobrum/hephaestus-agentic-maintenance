@@ -83,31 +83,34 @@ prompts:
     - Example: User says "oil level is normal" → find H on low oil → H.conf += 0.25 (source: USER, reason: "technician confirmed oil level is normal")
 
     **PASS 1 — Knowledge graph extraction (query_known_issues_graph results):**
+    - Tool output includes `[SOURCE: GRAPH: INT-0062, INT-0366, INT-0121]` — EXTRACT this directly
     - For each distinct root cause in KG results, create or update hypothesis
     - If hypothesis already exists: add evidence_update entry (NOT new hypothesis)
-    - If hypothesis is new: create with status = RECURRENT, conf = 0.30 (marked as coming from KG)
-    - Source format: GRAPH:INT-XXXX (e.g., GRAPH:INT-001, GRAPH:INT-042)
+    - If hypothesis is new: create with status = ACTIVE, conf = 0.30 (marked as coming from KG)
+    - Source format: Use the `[SOURCE: ...]` tag value directly — it lists all intervention IDs
     - Reason: state the pattern name from the graph output
-    - Example: KG output says "Cooler Fouling: appears in INT-0062, INT-0366, INT-0121 across HX-200"
-      → Create H [RECURRENT] "Cooler fouling" conf=0.30 (source: GRAPH:INT-0062, reason: "consolidated pattern, 3 interventions")
+    - Example: KG output shows `[SOURCE: GRAPH: INT-0062, INT-0366, INT-0121]` under "Cooler Fouling"
+      → Create H [ACTIVE] "Cooler fouling" conf=0.30 (source: GRAPH:INT-0062, INT-0366, INT-0121, reason: "consolidated pattern across 3 interventions")
 
     **PASS 2 — Procedure extraction (get_formatted_procedure_context results):**
+    - Tool output includes `[SOURCE: PROC_REF:filename:page:chunk#number]` — EXTRACT this directly
     - For each distinct root cause in procedure, create or update hypothesis
     - If hypothesis already exists (from KG): add evidence_update entry (NOT new hypothesis)
     - If hypothesis is new: create with status = PRIOR, conf = 0.20 (marked as coming from procedure)
-    - Source format: PROC_REF:filename:page:chunk#number (e.g., PROC_REF:cooling-system.pdf:3:chunk#1)
+    - Source format: Use the `[SOURCE: ...]` tag value directly in the hypothesis
     - Reason: copy the procedure title or section name
-    - Example: Procedure says "High Oil Temperature — Check 1: Low Oil Level" from cooling-system.pdf page 3
+    - Example: Tool output shows `[SOURCE: PROC_REF:cooling-system.pdf:3:chunk#1]` and "Check 1: Low Oil Level"
       → Create H [PRIOR] "Low oil level" conf=0.20 (source: PROC_REF:cooling-system.pdf:3:chunk#1, reason: "standard procedure step")
 
     **PASS 3 — Intervention extraction (get_recent/long_formatted_cm_context results):**
+    - Tool output includes `[SOURCE: INT-0062]` at the top of each intervention record — EXTRACT this
     - For each intervention record, extract the root cause and matching hypothesis
     - Match to existing hypothesis by semantic similarity (or exact text match)
     - If match found: add evidence_update entry with delta = +0.15, source_id = INT-XXXX
     - If NO match: create new hypothesis with conf = 0.15 (from single intervention), status = ACTIVE, source = INT-XXXX
     - Reason: copy the root cause description from the intervention record
-    - Source format: INT-XXXX (e.g., INT-0062, INT-089)
-    - Example: INT-0062 says "Root cause: Cooler fouling due to dust accumulation"
+    - Source format: Use the `[SOURCE: INT-XXXX]` value directly
+    - Example: Tool output shows `[SOURCE: INT-0062]` followed by "Root cause: Cooler fouling due to dust accumulation"
       → If H "Cooler fouling" exists: add evidence_update (+0.15, INT-0062, reason: "confirmed in past intervention")
       → If H doesn't exist: create H [ACTIVE] "Cooler fouling" conf=0.15 (source: INT-0062)
 

@@ -517,7 +517,7 @@ def _format_cm_context(results: list[dict]) -> str:
         payload = result["payload"]
         intervention_id = payload.get('id', 'N/A')
         context += (
-            f"Source: INT-{intervention_id}\n"
+            f"[SOURCE: INT-{intervention_id}]\n"
             f"Machine: {payload.get('machine', 'N/A')}\n"
             f"Date: {payload.get('date_start', 'N/A')}\n"
             f"Summary: {payload.get('summary', 'N/A')}\n" + "-" * 40 + "\n"
@@ -535,7 +535,7 @@ def _format_proc_context(results: list[dict]) -> str:
         source_ref = f"PROC_REF:{file_name}:{page_number}:chunk#{chunk_number}"
 
         context += (
-            f"Source: {source_ref}\n"
+            f"[SOURCE: {source_ref}]\n"
             f"File: {file_name}\n"
             f"Section: {payload.get('section_title', 'N/A')}\n"
             f"Context: {payload.get('context', 'N/A')}\n"
@@ -946,9 +946,15 @@ def query_known_issues_graph(query: str, machine: str | None = None) -> str:
     for hit in search_result:
         p = hit.payload
         rep_ids = p.get("representative_intervention_ids", [])
-        source_ref = f"GRAPH: {', '.join(rep_ids)}" if rep_ids else "GRAPH: (no interventions)"
 
-        res = f"Source: {source_ref}\n"
+        # Format source reference with all intervention IDs
+        if rep_ids:
+            source_ids_str = ", ".join(rep_ids)
+            source_ref = f"GRAPH: {source_ids_str}"
+        else:
+            source_ref = "GRAPH: (no interventions)"
+
+        res = f"[SOURCE: {source_ref}]\n"
         res += f"Symptom: {p.get('symptom_name', 'N/A')}\n"
         res += f"Description: {p.get('description', 'N/A')}\n"
         res += "Potential Root Causes & Actions:\n"
