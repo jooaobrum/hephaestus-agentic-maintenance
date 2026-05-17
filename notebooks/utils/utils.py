@@ -176,3 +176,34 @@ def get_tool_descriptions(function_list):
 
 def display_graph(graph):
     return display(Image(graph.get_graph().draw_mermaid_png()))
+
+
+def postprocess_response(response, final_response_class, agent_name=None):
+
+    final_answer = False
+    answer = ""
+    references = []
+
+    def _sanitise_response(response, prefix):
+
+        for tool_call in response.tool_calls:
+            answer = tool_call.get("args").get("answer")
+
+        return AIMessage(content=f"{prefix} {answer}")
+
+    if len(response.tool_calls) > 0:
+        for tool_call in response.tool_calls:
+            if tool_call.get("name") == final_response_class:
+                final_answer = True
+                answer = tool_call.get("args", {}).get("answer", {})
+                prefix = f"[{agent_name} final answer]" if agent_name else ""
+                references.extend(tool_call.get("args", {}).get("references", []))
+
+                response = _sanitise_response(response, prefix)
+
+    return {
+        "final_answer": final_answer,
+        "response": response,
+        "answer": answer,
+        "references": references,
+    }

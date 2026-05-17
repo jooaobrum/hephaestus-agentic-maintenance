@@ -27,6 +27,7 @@ dependencies = [
     "tabulate>=0.10.0",
     "fastmcp>=3.2.4",
     "langchain-mcp-adapters>=0.2.2",
+    "deepagents>=0.4.12",
 ]
 
 [tool.uv.workspace]

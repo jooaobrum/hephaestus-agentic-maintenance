@@ -15,7 +15,11 @@ services:
           "CMD",
           "bash",
           "-c",
-          "exec 3<>/dev/tcp/localhost/6333 && echo -e 'GET / HTTP/1.0\r\n\r\n' >&3 && cat <&3 | grep -q qdrant",
+          "exec 3<>/dev/tcp/localhost/6333 && echo -e 'GET / HTTP/1.0\r
+
+            \r
+
+            ' >&3 && cat <&3 | grep -q qdrant",
         ]
       interval: 10s
       timeout: 5s
@@ -53,7 +57,7 @@ services:
     env_file:
       - .env
     environment:
-      - API_URL=http://api:8000/rag/
+      - API_URL=http://api:8000/multiagent/
     depends_on:
       - api
     restart: unless-stopped
@@ -73,7 +77,6 @@ services:
     restart: unless-stopped
     volumes:
       - ./postgres_data:/var/lib/postgresql/data
-
     # ── MCP ──────────────────────────────────────────────────────────
   db-mcp-server:
     build:

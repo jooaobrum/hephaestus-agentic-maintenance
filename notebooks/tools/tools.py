@@ -1,10 +1,16 @@
+# -*- coding: utf-8 -*-
 from langchain_core.tools import tool
-from datetime import datetime
+from datetime import datetime, timedelta
 from qdrant_client import models
+import json
+import uuid
 
 from openai import OpenAI
 from qdrant_client import QdrantClient
 from sqlalchemy import create_engine, text
+from pydantic import BaseModel, Field, field_validator
+from langchain_openai import ChatOpenAI
+import pandas as pd
 
 PG_URL = (
     "postgresql+psycopg://langgraph_user:langgraph_password@localhost:5433/langgraph_db"
@@ -20,6 +26,124 @@ CM_COLLECTION = "cm_interventions_hybrid"
 PROC_COLLECTION = "procedures_hybrid"
 EMBEDDING_MODEL = "text-embedding-3-small"
 KEYWORD_MODEL = "bm25"
+GENERATION_MODEL = "gpt-5.4-nano"
+
+
+class SummaryResponse(BaseModel):
+    overview: str
+
+
+class RootCauseAction(BaseModel):
+    root_cause: str = Field(
+        description="Normalized root cause name (specific, avoid generalist terms)."
+    )
+    actions: list[str] = Field(
+        description="Ordered list of corrective actions that resolved this root cause."
+    )
+
+
+class KnownIssue(BaseModel):
+    symptom_name: str = Field(
+        description=(
+            "Normalized failure phenomenon name. "
+            "NEVER include machine IDs or machine names -- those belong in affected_machines. "
+            "Good: 'Coil Cooling Flow Fault'. Bad: 'Coil Cooling Flow Fault - IH-300'. "
+            "Calibrate specificity to cluster size: be more precise for small clusters."
+        )
+    )
+    description: str = Field(
+        description="2-4 sentence description of the issue pattern."
+    )
+    root_causes: list[RootCauseAction] = Field(
+        description="Main root causes observed in this cluster, each with the actions that resolved them."
+    )
+    affected_machines: list[str] = Field(
+        description="Normalized machine IDs impacted (e.g., ['CNC-500', 'CNC-750'])."
+    )
+    affected_machine_families: list[str] = Field(
+        description="Machine type/family names (e.g., ['CNC Machining Center'])."
+    )
+    representative_intervention_ids: list[str] = Field(
+        description="INT-IDs of the most representative interventions for this issue."
+    )
+
+
+class KnownCaseTemplateStorage(BaseModel):
+    """Model for storing known case templates with metadata."""
+
+    template_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    symptom_name: str
+    description: str
+    root_causes: list[RootCauseAction]
+    affected_machines: list[str]
+    affected_machine_families: list[str]
+    representative_intervention_ids: list[str]
+    created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_by_agent: str
+    validation_status: str = "valid"
+    validation_issues: list[str] = Field(default_factory=list)
+    validation_date: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+
+
+_llm = ChatOpenAI(model=GENERATION_MODEL)
+_llm_overview = _llm.with_structured_output(SummaryResponse)
+_llm_known_issue = _llm.with_structured_output(KnownIssue)
+
+
+def _initialize_known_case_templates_table():
+    """Create known_case_templates table if it doesn't exist."""
+    create_table_query = text("""
+        CREATE TABLE IF NOT EXISTS maintenance.known_case_templates (
+            template_id UUID PRIMARY KEY,
+            symptom_name VARCHAR(255) NOT NULL,
+            description TEXT,
+            root_causes JSONB,
+            affected_machines TEXT[],
+            affected_machine_families TEXT[],
+            representative_intervention_ids TEXT[],
+            created_at TIMESTAMP,
+            created_by_agent VARCHAR(100),
+            validation_status VARCHAR(50),
+            validation_issues TEXT[],
+            validation_date TIMESTAMP,
+            created_at_idx TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    try:
+        with pg_engine.connect() as conn:
+            conn.execute(create_table_query)
+            conn.commit()
+    except Exception as e:
+        print(f"Table initialization error (may already exist): {e}")
+
+
+def _initialize_confirmed_rca_cases_table():
+    """Create confirmed_rca_cases table if it doesn't exist."""
+    create_table_query = text("""
+        CREATE TABLE IF NOT EXISTS maintenance.confirmed_rca_cases (
+            case_id UUID PRIMARY KEY,
+            machine VARCHAR(100),
+            symptom VARCHAR(255),
+            diagnosed_root_cause TEXT,
+            actual_root_cause TEXT,
+            investigation_steps TEXT,
+            diagnosis_accuracy BOOLEAN,
+            created_at TIMESTAMP
+        )
+    """)
+
+    try:
+        with pg_engine.connect() as conn:
+            conn.execute(create_table_query)
+            conn.commit()
+    except Exception as e:
+        print(f"Table initialization error (may already exist): {e}")
+
+
+# Initialize tables on module load
+_initialize_known_case_templates_table()
+_initialize_confirmed_rca_cases_table()
 
 
 def _build_proc_filter(
@@ -337,13 +461,6 @@ def get_remaining_life(machine: str) -> str:
     return df.to_markdown(index=False)
 
 
-from datetime import datetime, timedelta
-import json
-import pandas as pd
-from sqlalchemy import text
-from qdrant_client import models
-from openai import OpenAI
-
 openai_client_local = OpenAI()
 
 
@@ -515,9 +632,9 @@ def _format_cm_context(results: list[dict]) -> str:
     context = ""
     for result in results:
         payload = result["payload"]
-        intervention_id = payload.get('id', 'N/A')
+        intervention_id = payload.get("id", "N/A")
         context += (
-            f"[SOURCE: INT-{intervention_id}]\n"
+            f"[SOURCE: {intervention_id}]\n"
             f"Machine: {payload.get('machine', 'N/A')}\n"
             f"Date: {payload.get('date_start', 'N/A')}\n"
             f"Summary: {payload.get('summary', 'N/A')}\n" + "-" * 40 + "\n"
@@ -529,18 +646,18 @@ def _format_proc_context(results: list[dict]) -> str:
     context = ""
     for result in results:
         payload = result["payload"]
-        file_name = payload.get('file_name', 'N/A')
+        file_name = payload.get("file_name", "N/A")
         # Try multiple field names for page number
         page_number = (
-            payload.get('page_number') or
-            payload.get('page') or
-            payload.get('page_num') or
-            'N/A'
+            payload.get("page_number")
+            or payload.get("page")
+            or payload.get("page_num")
+            or "N/A"
         )
-        chunk_number = payload.get('chunk_number', 'N/A')
+        chunk_number = payload.get("chunk_number", "N/A")
 
         # Only include page if it's not N/A
-        if page_number == 'N/A':
+        if page_number == "N/A":
             source_ref = f"PROC_REF:{file_name}:chunk#{chunk_number}"
         else:
             source_ref = f"PROC_REF:{file_name}:{page_number}:chunk#{chunk_number}"
@@ -586,6 +703,213 @@ def get_formatted_cm_context(
         date_end=date_end,
     )
     return _format_cm_context(results)
+
+
+@tool
+def summarize_intervention(intervention_id: str) -> str:
+    """
+    Generate a concise 2-3 phrase overview of a specific maintenance intervention.
+
+    Use when: you need a quick summary of what was done in a particular intervention without full details.
+
+    Args:
+        intervention_id: The intervention ID (e.g., INT-001) to summarize.
+
+    Returns: A formatted summary with INT-ID and overview for template building.
+    """
+    intervention_history = _get_intervention_detail_impl(intervention_id)
+
+    prompt = f"""Describe the intervention as an overview of max 2-3 phrases.
+
+Here is the intervention history:
+{intervention_history}
+"""
+
+    try:
+        response = _llm_overview.invoke(prompt)
+    except Exception as e:
+        return f"[INT: {intervention_id}] Error: {e}"
+
+    return f"[INT: {intervention_id}] {response.overview}"
+
+
+@tool
+def build_known_case_template(summaries: str) -> dict:
+    """
+    Process intervention summaries and create a normalized "Known Issue" template.
+
+    Use when consolidating multiple similar interventions into a reusable knowledge base entry.
+
+    Args:
+        summaries: Multiple intervention summaries to normalize.
+
+    Returns: Structured JSON with symptom_name, description, root_causes, affected_machines, families, and representative_intervention_ids.
+    """
+    prompt = f"""Your goal is to process intervention summaries and create a normalized Known Issue record.
+
+CRITICAL: Extract ALL INT-IDs marked as [INT: XXX-XXXX] from the summaries. Include EVERY INT-ID found.
+
+Output must be JSON:
+- symptom_name: normalized failure name (no machine IDs)
+- description: 2-4 sentences about the failure pattern
+- root_causes: list of objects with root_cause and actions array
+- affected_machines: list of machine IDs from summaries
+- affected_machine_families: inferred machine types (CNC, Oven, etc)
+- representative_intervention_ids: COMPLETE list of ALL INT-IDs found in the summaries (do not omit any)
+
+Example for symptom_name: use "Coil Cooling Flow Fault", not "IH-300 cooling flow fault".
+
+Process these summaries:
+
+{summaries}
+
+Return valid JSON only. Ensure representative_intervention_ids contains ALL INT-IDs from the input."""
+
+    try:
+        response = _llm_known_issue.invoke(prompt)
+    except Exception as e:
+        return f"Error: {e}"
+
+    return response
+
+
+@tool
+def save_known_case_template(
+    symptom_name: str,
+    description: str,
+    root_causes_json: str,
+    affected_machines: str,
+    affected_machine_families: str,
+    representative_intervention_ids: str,
+    created_by_agent: str,
+    validation_status: str = "valid",
+    validation_issues_json: str = "[]",
+) -> dict:
+    """
+    Save a validated known case template to the database with full traceability.
+
+    Use after template validation passes to persist it for RCA agent retrieval.
+
+    Args:
+        symptom_name: Normalized failure symptom name
+        description: Description of the issue pattern
+        root_causes_json: JSON string of root causes (list of {root_cause, actions})
+        affected_machines: Comma-separated or JSON list of machine IDs
+        affected_machine_families: Comma-separated or JSON list of machine families
+        representative_intervention_ids: Comma-separated or JSON list of INT-IDs
+        created_by_agent: Name of the agent creating this template (e.g., "summarizer_agent")
+        validation_status: "valid" or "invalid"
+        validation_issues_json: JSON list of validation issues (empty for valid templates)
+
+    Returns: dict with template_id, status, and metadata for reference
+    """
+    try:
+        template_id = str(uuid.uuid4())
+        now = datetime.utcnow().isoformat()
+
+        # Parse JSON inputs
+        root_causes = (
+            json.loads(root_causes_json)
+            if isinstance(root_causes_json, str)
+            else root_causes_json
+        )
+        validation_issues = (
+            json.loads(validation_issues_json)
+            if isinstance(validation_issues_json, str)
+            else validation_issues_json
+        )
+
+        # Parse list inputs (handle both JSON arrays and comma-separated strings)
+        if isinstance(affected_machines, str):
+            try:
+                affected_machines = json.loads(affected_machines)
+            except json.JSONDecodeError:
+                affected_machines = [m.strip() for m in affected_machines.split(",")]
+
+        if isinstance(affected_machine_families, str):
+            try:
+                affected_machine_families = json.loads(affected_machine_families)
+            except json.JSONDecodeError:
+                affected_machine_families = [
+                    f.strip() for f in affected_machine_families.split(",")
+                ]
+
+        if isinstance(representative_intervention_ids, str):
+            try:
+                representative_intervention_ids = json.loads(
+                    representative_intervention_ids
+                )
+            except json.JSONDecodeError:
+                representative_intervention_ids = [
+                    i.strip() for i in representative_intervention_ids.split(",")
+                ]
+
+        # Insert into database
+        insert_query = text("""
+            INSERT INTO maintenance.known_case_templates (
+                template_id,
+                symptom_name,
+                description,
+                root_causes,
+                affected_machines,
+                affected_machine_families,
+                representative_intervention_ids,
+                created_at,
+                created_by_agent,
+                validation_status,
+                validation_issues,
+                validation_date
+            ) VALUES (
+                :template_id,
+                :symptom_name,
+                :description,
+                :root_causes,
+                :affected_machines,
+                :affected_machine_families,
+                :representative_intervention_ids,
+                :created_at,
+                :created_by_agent,
+                :validation_status,
+                :validation_issues,
+                :validation_date
+            )
+        """)
+
+        params = {
+            "template_id": template_id,
+            "symptom_name": symptom_name,
+            "description": description,
+            "root_causes": json.dumps(root_causes),
+            "affected_machines": affected_machines,
+            "affected_machine_families": affected_machine_families,
+            "representative_intervention_ids": representative_intervention_ids,
+            "created_at": now,
+            "created_by_agent": created_by_agent,
+            "validation_status": validation_status,
+            "validation_issues": validation_issues,
+            "validation_date": now,
+        }
+
+        with pg_engine.connect() as conn:
+            conn.execute(insert_query, params)
+            conn.commit()
+
+        return {
+            "status": "success",
+            "template_id": template_id,
+            "symptom_name": symptom_name,
+            "created_at": now,
+            "affected_machines": affected_machines,
+            "representative_intervention_ids": representative_intervention_ids,
+            "message": f"Template saved successfully with ID: {template_id}",
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to save template: {str(e)}",
+            "error": str(e),
+        }
 
 
 @tool
@@ -693,7 +1017,7 @@ def get_formatted_procedure_context(
 @tool
 def check_machine_exists(machine: str) -> str:
     """
-    Validate whether a machine ID exists in the system.
+    Validate whether a machine ID exists in the system and return peer machines of the same type.
 
     Use FIRST whenever a machine ID is provided in user input.
     Blocks all downstream tools until machine is validated.
@@ -704,28 +1028,55 @@ def check_machine_exists(machine: str) -> str:
 
     Returns:
     - confirmation if machine exists with metadata (intervention count, date range)
+    - peer machines of the same type — use these to broaden graph/CM queries
     - or error message if not found (user must provide valid ID)
     """
     query = text("""
-        SELECT machine, COUNT(*) as intervention_count, 
+        SELECT machine, machine_type, COUNT(*) as intervention_count,
                MIN(date_start) as first_intervention, MAX(date_start) as last_intervention
         FROM maintenance.interventions
         WHERE machine = :machine
-        GROUP BY machine
+        GROUP BY machine, machine_type
     """)
     with pg_engine.connect() as conn:
         result = conn.execute(query, {"machine": machine}).fetchone()
 
     if result:
+        machine_type = result[1]
+
+        peers_query = text("""
+            SELECT DISTINCT machine
+            FROM maintenance.interventions
+            WHERE machine_type = :machine_type
+              AND machine != :machine
+            ORDER BY machine
+        """)
+        with pg_engine.connect() as conn:
+            peers = [
+                row[0]
+                for row in conn.execute(
+                    peers_query, {"machine_type": machine_type, "machine": machine}
+                ).fetchall()
+            ]
+
+        peers_str = (
+            f"- Peer machines (same type '{machine_type}'): {', '.join(peers)}\n"
+            f"  → Use these machine IDs to broaden graph or CM queries when looking for fleet-wide patterns."
+            if peers
+            else f"- No other machines of type '{machine_type}' found."
+        )
+
         return (
             f"✓ Machine '{machine}' exists in database.\n"
-            f"- Interventions recorded: {result[1]}\n"
-            f"- First intervention: {result[2]}\n"
-            f"- Last intervention: {result[3]}"
+            f"- Machine type: {machine_type}\n"
+            f"- Interventions recorded: {result[2]}\n"
+            f"- First intervention: {result[3]}\n"
+            f"- Last intervention: {result[4]}\n"
+            f"{peers_str}"
         )
 
     query_sensors = text("""
-        SELECT DISTINCT machine FROM maintenance.sensor_catalog 
+        SELECT DISTINCT machine FROM maintenance.sensor_catalog
         WHERE machine = :machine LIMIT 1
     """)
     with pg_engine.connect() as conn:
@@ -869,7 +1220,7 @@ def get_sensor_timeline_tool(
     Use to understand degradation pattern before deep-diving.
 
     Includes:
-    - trend direction (↑ ↓ →)
+    - trend direction (up/down/flat)
     - first threshold breach timestamp
     - rate-of-change (max delta per reading)
 
@@ -974,7 +1325,7 @@ def query_known_issues_graph(query: str, machine: str | None = None) -> str:
 
         machines = p.get("affected_machines", [])
         if machines:
-            res += f"Fleet impact: {len(machines)} machine(s) affected — {', '.join(machines)}\n"
+            res += f"Fleet impact: {len(machines)} machine(s) affected -- {', '.join(machines)}\n"
 
         output.append(res)
 
@@ -1036,12 +1387,90 @@ def get_sensor_anomaly_summary(
         return f"No threshold anomalies found for {machine} between {start_date} and {end_date}."
 
     display_df = df[
-        ["tag", "sensor_name", "has_critical", "event_count", "first_breach", "avg_value", "warn_lo", "warn_hi"]
+        [
+            "tag",
+            "sensor_name",
+            "has_critical",
+            "event_count",
+            "first_breach",
+            "avg_value",
+            "warn_lo",
+            "warn_hi",
+        ]
     ].copy()
-    display_df.columns = ["Tag", "Sensor", "Critical?", "Events", "First Breach", "Avg Value", "Warn Low", "Warn High"]
+    display_df.columns = [
+        "Tag",
+        "Sensor",
+        "Critical?",
+        "Events",
+        "First Breach",
+        "Avg Value",
+        "Warn Low",
+        "Warn High",
+    ]
     display_df["Critical?"] = display_df["Critical?"].map({1: "Yes", 0: "No"})
 
     return f"**Sensor Anomaly Summary (Top {top_n}):**\n{display_df.to_markdown(index=False)}"
+
+
+def _get_intervention_detail_impl(intervention_id: str) -> str:
+    """Internal implementation for retrieving intervention details."""
+    # Handle both INT-ID and raw ID formats
+    query_id = (
+        intervention_id
+        if intervention_id.startswith("INT-")
+        else f"INT-{intervention_id}"
+    )
+
+    query = text("""
+        SELECT
+            id,
+            machine,
+            machine_type,
+            date_start,
+            date_end,
+            duration_min,
+            fault_description,
+            intervention_type,
+            severity,
+            technician,
+            supervisor,
+            subsystem,
+            fault_code,
+            comments
+        FROM maintenance.interventions
+        WHERE id = :intervention_id
+    """)
+
+    with pg_engine.connect() as conn:
+        result = conn.execute(query, {"intervention_id": query_id}).fetchone()
+
+    if not result:
+        return f"Intervention '{intervention_id}' not found."
+
+    columns = [
+        "ID",
+        "Machine",
+        "Machine Type",
+        "Start Date",
+        "End Date",
+        "Duration (min)",
+        "Fault Description",
+        "Type",
+        "Severity",
+        "Technician",
+        "Supervisor",
+        "Subsystem",
+        "Fault Code",
+        "Comments",
+    ]
+
+    output = f"**Intervention Detail: {intervention_id}**\n\n"
+    for col, val in zip(columns, result):
+        if val is not None:
+            output += f"**{col}:** {val}\n"
+
+    return output
 
 
 @tool
@@ -1057,44 +1486,7 @@ def get_intervention_detail(intervention_id: str) -> str:
 
     Returns: complete intervention record with all metadata.
     """
-    query = text("""
-        SELECT
-            id,
-            machine,
-            date_start,
-            date_end,
-            duration_hours,
-            summary,
-            description,
-            root_cause,
-            parts_replaced,
-            labor_hours,
-            downtime_hours,
-            cost_eur,
-            technician_name,
-            tags
-        FROM maintenance.interventions
-        WHERE id = :intervention_id
-    """)
-
-    with pg_engine.connect() as conn:
-        result = conn.execute(query, {"intervention_id": intervention_id}).fetchone()
-
-    if not result:
-        return f"Intervention '{intervention_id}' not found."
-
-    columns = [
-        "ID", "Machine", "Start Date", "End Date", "Duration (hrs)",
-        "Summary", "Description", "Root Cause", "Parts Replaced",
-        "Labor (hrs)", "Downtime (hrs)", "Cost (€)", "Technician", "Tags"
-    ]
-
-    output = f"**Intervention Detail: {intervention_id}**\n\n"
-    for col, val in zip(columns, result):
-        if val is not None:
-            output += f"**{col}:** {val}\n"
-
-    return output
+    return _get_intervention_detail_impl(intervention_id)
 
 
 @tool
@@ -1135,3 +1527,421 @@ def get_fleet_impact_for_symptom(symptom_query: str) -> str:
         output.append(block)
 
     return "\n---\n".join(output)
+
+
+@tool
+def list_intervention_ids_by_date(
+    machine: str,
+    start_date: str,
+    end_date: str,
+) -> str:
+    """
+    List all intervention IDs for a machine within a date range.
+
+    Use when: you need to retrieve all intervention IDs for a specific machine during a time period
+    before processing or summarizing them individually.
+
+    Args:
+        machine: Machine ID (e.g., 'CNC-500')
+        start_date: Start date in ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)
+        end_date: End date in ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)
+
+    Returns: List of intervention IDs sorted chronologically with their dates.
+    """
+    query = text("""
+        SELECT id, date_start
+        FROM maintenance.interventions
+        WHERE machine = :machine
+          AND date_start >= :start_date
+          AND date_start <= :end_date
+        ORDER BY date_start DESC
+    """)
+    params = {
+        "machine": machine,
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+
+    with pg_engine.connect() as conn:
+        df = pd.read_sql(query, conn, params=params)
+
+    if df.empty:
+        return f"No interventions found for machine '{machine}' between {start_date} and {end_date}."
+
+    output = f"**Interventions for {machine} ({start_date} to {end_date}):**\n\n"
+    for _, row in df.iterrows():
+        output += f"- **{row['id']}** ({row['date_start']})\n"
+
+    output += f"\n**Total: {len(df)} intervention(s)**"
+    return output
+
+
+@tool
+def list_procedure_sections(machine: str) -> str:
+    """
+    List the section titles / fault-code headers from this machine's troubleshooting manual,
+    with chunk ranges and file names.
+
+    Use FIRST during the Orient stage — before retrieving procedure chunks — to see which
+    fault codes and topics the manual covers. Helps you pick the right `file_name` and
+    a focused query for `get_formatted_procedure_context` afterwards.
+
+    Returns: structured list of (file_name, section_title, chunk_min, chunk_max) tuples,
+    prioritizing files that match the machine prefix.
+    """
+    try:
+        points, _ = QDRANT_CLIENT.scroll(
+            collection_name=PROC_COLLECTION,
+            limit=500,
+            with_payload=True,
+        )
+    except Exception as e:
+        return f"Error listing procedure sections: {e}"
+
+    if not points:
+        return "No procedure documents found."
+
+    # Group by (file_name, section_title) and track min/max chunk numbers
+    by_section: dict[tuple[str, str], dict] = {}
+    for p in points:
+        payload = p.payload or {}
+        fname = payload.get("file_name", "unknown")
+        section = (payload.get("section_title") or "").strip()
+        chunk_num = payload.get("chunk_number")
+        if not section or chunk_num is None:
+            continue
+
+        key = (fname, section)
+        if key not in by_section:
+            by_section[key] = {"min_chunk": chunk_num, "max_chunk": chunk_num}
+        else:
+            by_section[key]["min_chunk"] = min(by_section[key]["min_chunk"], chunk_num)
+            by_section[key]["max_chunk"] = max(by_section[key]["max_chunk"], chunk_num)
+
+    if not by_section:
+        return "Procedure documents exist but no section titles were found."
+
+    # Separate files: exact match first, then prefix match, then all others
+    exact_matches = {}
+    prefix_matches = {}
+    other_files = {}
+
+    for (fname, section), meta in by_section.items():
+        if fname == f"{machine}_Troubleshooting_Procedures":
+            exact_matches.setdefault(fname, []).append((section, meta))
+        elif machine in fname or fname.startswith(machine[:3]):
+            prefix_matches.setdefault(fname, []).append((section, meta))
+        else:
+            other_files.setdefault(fname, []).append((section, meta))
+
+    output = f"**Procedure sections for {machine}**\n\n"
+
+    # Output exact matches first
+    for fname, sections in exact_matches.items():
+        output += f"### {fname} (EXACT MATCH)\n"
+        for section, meta in sorted(sections, key=lambda x: x[1]["min_chunk"]):
+            output += (
+                f"- **{section}** (chunks {meta['min_chunk']}-{meta['max_chunk']})\n"
+            )
+        output += "\n"
+
+    # Then prefix matches
+    for fname, sections in prefix_matches.items():
+        output += f"### {fname}\n"
+        for section, meta in sorted(sections, key=lambda x: x[1]["min_chunk"]):
+            output += (
+                f"- **{section}** (chunks {meta['min_chunk']}-{meta['max_chunk']})\n"
+            )
+        output += "\n"
+
+    # Finally, all other files
+    if other_files:
+        output += "**Other procedure files** (less relevant):\n"
+        for fname, sections in other_files.items():
+            output += f"- {fname}: {len(sections)} sections\n"
+
+    return output
+
+
+@tool
+def list_known_issue_categories(machine: str | None = None, limit: int = 15) -> str:
+    """
+    List top-level known-issue categories from the knowledge graph, with frequency
+    (number of affected machines) and machine families.
+
+    Use during the Orient stage to see the semantic landscape of failure modes before
+    diving into a specific symptom. Optionally filter to categories that touch a
+    target machine (the category still surfaces all machines in its cluster).
+
+    Returns: ranked list of symptom_name, affected machine count, and machine families.
+    """
+    try:
+        points, _ = QDRANT_CLIENT.scroll(
+            collection_name="known_issues",
+            limit=200,
+            with_payload=True,
+        )
+    except Exception as e:
+        return f"Error listing known-issue categories: {e}"
+
+    if not points:
+        return "No known-issue categories found in the graph."
+
+    rows = []
+    for p in points:
+        payload = p.payload or {}
+        machines = payload.get("affected_machines", []) or []
+        if machine and machine not in machines:
+            continue
+        rows.append(
+            {
+                "symptom_name": payload.get("symptom_name", "N/A"),
+                "n_machines": len(machines),
+                "families": payload.get("affected_machine_families", []) or [],
+                "machines": machines,
+            }
+        )
+
+    if not rows:
+        return f"No known-issue categories found{' for machine ' + machine if machine else ''}."
+
+    rows.sort(key=lambda r: r["n_machines"], reverse=True)
+    rows = rows[:limit]
+
+    header = "**Known-issue categories"
+    header += f" touching {machine}" if machine else " (fleet-wide)"
+    header += f"** (top {len(rows)} by fleet impact)\n\n"
+    output = header
+    for r in rows:
+        families = ", ".join(r["families"]) if r["families"] else "N/A"
+        output += f"- **{r['symptom_name']}** — {r['n_machines']} machine(s); families: {families}\n"
+    return output
+
+
+@tool
+def find_similar_machines(machine: str) -> str:
+    """
+    Find machines similar to the target — same family and/or co-occurring in the same
+    known-issue clusters in the knowledge graph.
+
+    Use during the Orient stage when you want to broaden retrieval beyond the target
+    machine (e.g. to pull fleet evidence with `machine_prefix` or to check whether a
+    symptom is fleet-wide). Returns peer machine IDs grouped by source of similarity.
+
+    Returns: family peers and graph co-occurrence peers, with cluster names.
+    """
+    try:
+        points, _ = QDRANT_CLIENT.scroll(
+            collection_name="known_issues",
+            limit=500,
+            with_payload=True,
+        )
+    except Exception as e:
+        return f"Error querying graph: {e}"
+
+    target_families: set[str] = set()
+    graph_peers: dict[str, list[str]] = {}
+    family_peers: set[str] = set()
+
+    for p in points:
+        payload = p.payload or {}
+        machines = set(payload.get("affected_machines", []) or [])
+        families = set(payload.get("affected_machine_families", []) or [])
+        symptom_name = payload.get("symptom_name", "N/A")
+
+        if machine in machines:
+            target_families.update(families)
+            for m in machines:
+                if m == machine:
+                    continue
+                graph_peers.setdefault(m, [])
+                if symptom_name not in graph_peers[m]:
+                    graph_peers[m].append(symptom_name)
+
+    if target_families:
+        for p in points:
+            payload = p.payload or {}
+            machines = payload.get("affected_machines", []) or []
+            families = set(payload.get("affected_machine_families", []) or [])
+            if families & target_families:
+                for m in machines:
+                    if m != machine:
+                        family_peers.add(m)
+
+    if not graph_peers and not family_peers:
+        return f"No similar machines found for '{machine}' in the knowledge graph."
+
+    output = f"**Similar machines to {machine}**\n\n"
+    if target_families:
+        output += f"Target families: {', '.join(sorted(target_families))}\n\n"
+
+    if graph_peers:
+        output += "### Co-occurring in same known-issue clusters\n"
+        for m, clusters in sorted(graph_peers.items(), key=lambda kv: -len(kv[1])):
+            output += f"- **{m}** — shared clusters: {', '.join(clusters)}\n"
+        output += "\n"
+
+    family_only = family_peers - set(graph_peers.keys())
+    if family_only:
+        output += "### Same machine family (no shared incidents yet)\n"
+        for m in sorted(family_only):
+            output += f"- {m}\n"
+
+    return output
+
+
+@tool
+def get_known_case_templates(
+    machine: str | None = None,
+    symptom: str | None = None,
+    limit: int = 5,
+) -> str:
+    """
+    Retrieve saved known case templates for RCA agent reference.
+
+    Use when: diagnosing a machine issue to quickly find similar past patterns with proven resolutions.
+
+    Args:
+        machine: Optional - filter by affected machine ID (e.g., 'HX-200')
+        symptom: Optional - search by symptom name keyword (semantic search)
+        limit: Maximum templates to return (default 5)
+
+    Returns: Formatted list of known case templates with metadata and intervention references
+    """
+    try:
+        conditions = []
+
+        if machine:
+            conditions.append(f"'{machine}' = ANY(affected_machines)")
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+        query = text(f"""
+            SELECT
+                template_id,
+                symptom_name,
+                description,
+                root_causes,
+                affected_machines,
+                representative_intervention_ids,
+                created_at,
+                created_by_agent
+            FROM maintenance.known_case_templates
+            WHERE {where_clause}
+            ORDER BY created_at DESC
+            LIMIT :limit
+        """)
+
+        params = {"limit": limit}
+
+        with pg_engine.connect() as conn:
+            df = pd.read_sql(query, conn, params=params)
+
+        if df.empty:
+            filters = []
+            if machine:
+                filters.append(f"machine '{machine}'")
+            if symptom:
+                filters.append(f"symptom '{symptom}'")
+            filter_str = " and ".join(filters) if filters else "any"
+            return f"No known case templates found for {filter_str}."
+
+        output = f"**Known Case Templates ({len(df)} found):**\n\n"
+
+        for idx, row in df.iterrows():
+            template_id = row["template_id"]
+            symptom_name = row["symptom_name"]
+            description = row["description"]
+            affected_machines = row["affected_machines"]
+            rep_ids = row["representative_intervention_ids"]
+            created_at = row["created_at"]
+
+            output += f"### Template {idx + 1}: {symptom_name}\n"
+            output += f"**ID:** `{template_id}`\n"
+            output += f"**Description:** {description}\n"
+            output += f"**Affected Machines:** {', '.join(affected_machines) if affected_machines else 'N/A'}\n"
+            output += f"**Evidence Base:** {len(rep_ids)} interventions\n"
+            output += f"**Created:** {created_at}\n\n"
+
+        return output
+
+    except Exception as e:
+        return f"Error retrieving known case templates: {str(e)}"
+
+
+@tool
+def save_confirmed_rca_case(
+    machine: str,
+    symptom: str,
+    diagnosed_root_cause: str,
+    actual_root_cause: str,
+    investigation_steps: str,
+    diagnosis_accuracy: bool,
+) -> dict:
+    """
+    Save confirmed RCA diagnosis as a case for future reference.
+
+    Use after operator confirms the diagnosis was correct.
+
+    Args:
+        machine: Machine ID (e.g., 'HX-200')
+        symptom: Initial symptom reported (e.g., 'High oil temperature warning')
+        diagnosed_root_cause: What the RCA agent diagnosed
+        actual_root_cause: What operator confirmed was the real cause
+        investigation_steps: Summary of steps taken (e.g., "Checked sensor readings, reviewed procedures")
+        diagnosis_accuracy: True if diagnosed == actual, False if operator corrected
+
+    Returns: dict with case_id and confirmation
+    """
+    try:
+        case_id = str(uuid.uuid4())
+        now = datetime.utcnow().isoformat()
+
+        insert_query = text("""
+            INSERT INTO maintenance.confirmed_rca_cases (
+                case_id,
+                machine,
+                symptom,
+                diagnosed_root_cause,
+                actual_root_cause,
+                investigation_steps,
+                diagnosis_accuracy,
+                created_at
+            ) VALUES (
+                :case_id,
+                :machine,
+                :symptom,
+                :diagnosed_root_cause,
+                :actual_root_cause,
+                :investigation_steps,
+                :diagnosis_accuracy,
+                :created_at
+            )
+        """)
+
+        params = {
+            "case_id": case_id,
+            "machine": machine,
+            "symptom": symptom,
+            "diagnosed_root_cause": diagnosed_root_cause,
+            "actual_root_cause": actual_root_cause,
+            "investigation_steps": investigation_steps,
+            "diagnosis_accuracy": diagnosis_accuracy,
+            "created_at": now,
+        }
+
+        with pg_engine.connect() as conn:
+            conn.execute(insert_query, params)
+            conn.commit()
+
+        return {
+            "status": "success",
+            "case_id": case_id,
+            "message": f"RCA case saved with ID: {case_id}",
+            "accuracy": "✓ Diagnosis correct"
+            if diagnosis_accuracy
+            else "⚠ Diagnosis corrected by operator",
+        }
+
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to save RCA case: {str(e)}"}

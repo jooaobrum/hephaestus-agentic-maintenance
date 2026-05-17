@@ -191,6 +191,8 @@ cython_debug/
 # Ruff stuff:
 .ruff_cache/
 
+
+
 # PyPI configuration file
 .pypirc
 
@@ -208,6 +210,7 @@ __marimo__/
 
 
 # Folders from project
+.genie
 .claude
 data/
 .qdrant_data/

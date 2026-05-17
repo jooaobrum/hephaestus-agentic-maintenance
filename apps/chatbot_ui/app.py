@@ -4,10 +4,29 @@ import requests
 import streamlit as st
 import uuid
 
-API_URL = os.getenv("API_URL", "http://localhost:8000/rag/")
+API_URL = os.getenv("API_URL", "http://localhost:8000/multiagent/")
 STREAM_URL = API_URL.rstrip("/") + "/stream"
-# Related to feedback: define the feedback endpoint
-FEEDBACK_URL = API_URL.replace("/rag/", "/submit_feedback/")
+FEEDBACK_URL = API_URL.replace("/multiagent/", "/submit_feedback/")
+
+
+WELCOME_MESSAGE = """
+Hello, I'm **Hephaestus**, your maintenance assistant.
+
+I can help you with:
+- 🔍 **Root cause analysis** — diagnose machine failures from symptoms
+- 📖 **Procedure lookup** — find the right maintenance procedure for a fault
+- 📚 **Historical interventions** — search past work orders and resolutions
+- 🛠️ **Troubleshooting guidance** — step-by-step support during interventions
+
+Tell me the **machine ID** and the **symptom** you're seeing, and I'll take it from there.
+"""
+
+EXAMPLE_QUERIES = [
+    "Machine M-204 is overheating after 30 minutes of operation. What could be the cause?",
+    "Show me past interventions on pump P-118 related to vibration.",
+    "What is the procedure to replace the bearing on conveyor C-07?",
+    "Compressor AC-12 trips on overload — where do I start troubleshooting?",
+]
 
 
 # --- Functions ---
@@ -16,24 +35,9 @@ FEEDBACK_URL = API_URL.replace("/rag/", "/submit_feedback/")
 def get_session_id():
     if "session_id" not in st.session_state:
         st.session_state.session_id = str(uuid.uuid4())
-
     return st.session_state.session_id
 
 
-THREAD_ID = get_session_id()
-
-
-# --- Sidebar ---
-st.set_page_config(page_title="Hephaestus RAG Chatbot", layout="wide")
-
-# --- Chat ---
-st.title("Hephaestus RAG Chatbot")
-
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-
-# Custom function for feedback submission (related to feedback)
 def submit_fb(trace_id, value, text=""):
     try:
         requests.post(
@@ -46,27 +50,71 @@ def submit_fb(trace_id, value, text=""):
         st.error(f"Error: {e}")
 
 
+def send_query(prompt: str):
+    st.session_state.pending_prompt = prompt
+
+
+THREAD_ID = get_session_id()
+
+# --- Page ---
+st.set_page_config(page_title="Hephaestus Agent", page_icon="🛠️", layout="wide")
+
+# --- Sidebar ---
+with st.sidebar:
+    st.header("🛠️ Hephaestus Agent")
+    st.caption("Maintenance assistant powered by AI")
+    st.divider()
+    st.markdown("**Session**")
+    st.code(THREAD_ID[:8], language=None)
+    if st.button("🔄 New session", use_container_width=True):
+        st.session_state.clear()
+        st.rerun()
+    st.divider()
+    st.markdown("**Tips**")
+    st.caption(
+        "Include the machine ID and a clear symptom description for best results. "
+        "You can ask follow-up questions in the same session."
+    )
+
+# --- Main ---
+st.title("🛠️ Hephaestus Agent")
+st.caption("Your AI assistant for industrial maintenance")
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+if "pending_prompt" not in st.session_state:
+    st.session_state.pending_prompt = None
+
+# Welcome screen with examples (only when no conversation yet)
+if not st.session_state.messages:
+    with st.chat_message("assistant"):
+        st.markdown(WELCOME_MESSAGE)
+        st.markdown("**Try one of these examples:**")
+        cols = st.columns(2)
+        for i, example in enumerate(EXAMPLE_QUERIES):
+            with cols[i % 2]:
+                if st.button(example, key=f"example_{i}", use_container_width=True):
+                    send_query(example)
+                    st.rerun()
+
+# Render history
 for i, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
-        # Intuitive feedback UI based on user design
         if msg["role"] == "assistant" and "trace_id" in msg:
             fb_key = f"fb_{msg['trace_id']}_{i}"
             done_key = f"done_{fb_key}"
             recorded_key = f"recorded_{fb_key}"
 
-            # If not yet finalized (closed or sent)
             if not st.session_state.get(done_key):
                 feedback = st.feedback("thumbs", key=fb_key)
 
-                # If a thumb has been selected
                 if feedback is not None:
-                    # 1. Immediately record the thumb if not already done
                     if not st.session_state.get(recorded_key):
                         submit_fb(msg["trace_id"], feedback)
                         st.session_state[recorded_key] = True
 
-                    # 2. Show the expanded feedback form
                     st.markdown("**Want to tell us more? (Optional)**")
                     feedback_type = "positive" if feedback == 1 else "negative"
                     st.caption(
@@ -79,7 +127,6 @@ for i, msg in enumerate(st.session_state.messages):
                         height=100,
                     )
 
-                    # 3. Footer buttons: Send and Close
                     col_send, col_close, col_spacer = st.columns([0.09, 0.09, 1.3])
                     with col_send:
                         if st.button(
@@ -93,10 +140,15 @@ for i, msg in enumerate(st.session_state.messages):
                             st.session_state[done_key] = True
                             st.rerun()
             else:
-                # Post-submission state
                 st.caption("Feedback received. Thank you!")
 
-if prompt := st.chat_input("Type your message..."):
+# Resolve prompt source: chat input OR example button click
+prompt = st.chat_input("Describe the machine and the symptom...")
+if st.session_state.pending_prompt and not prompt:
+    prompt = st.session_state.pending_prompt
+    st.session_state.pending_prompt = None
+
+if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
@@ -106,41 +158,50 @@ if prompt := st.chat_input("Type your message..."):
         trace_id = None
 
         try:
-            with st.status("Processing...", expanded=True) as status_box:
-                with requests.post(
-                    STREAM_URL,
-                    json={"query": prompt, "thread_id": THREAD_ID},
-                    timeout=120,
-                    stream=True,
-                ) as response:
-                    response.raise_for_status()
-                    for line in response.iter_lines(decode_unicode=True):
-                        if not line or not line.startswith("data: "):
-                            continue
-                        payload = line[len("data: "):]
-                        if payload == "[DONE]":
-                            break
-                        event = json.loads(payload)
+            status_container = st.container()
+            answer_placeholder = st.empty()
 
-                        if event.get("trace_id"):
-                            trace_id = event["trace_id"]
+            with status_container:
+                with st.status("Analyzing...", expanded=True) as status_box:
+                    with requests.post(
+                        STREAM_URL,
+                        json={"query": prompt, "thread_id": THREAD_ID},
+                        timeout=120,
+                        stream=True,
+                    ) as response:
+                        response.raise_for_status()
+                        for line in response.iter_lines(decode_unicode=True):
+                            if not line or not line.startswith("data: "):
+                                continue
+                            payload = line[len("data: ") :]
+                            if payload == "[DONE]":
+                                break
+                            event = json.loads(payload)
 
-                        if event["event"] == "status":
-                            st.write(event["data"])
-                        elif event["event"] == "tool_calls":
-                            for t in event["data"]:
-                                st.write(f"- {t}")
-                        elif event["event"] == "answer":
-                            answer = event["data"]
+                            if event.get("trace_id"):
+                                trace_id = event["trace_id"]
 
-                status_box.update(label="Done", state="complete", expanded=False)
+                            evt = event.get("event")
+                            if evt == "status":
+                                st.write(event["data"])
+                            elif evt == "tool_calls":
+                                for t in event["data"]:
+                                    st.write(f"🔧 {t}")
+                            elif evt == "token":
+                                answer += event["data"]
+                                answer_placeholder.markdown(answer + "▌")
+                            elif evt == "answer":
+                                answer = event["data"]
+                                answer_placeholder.markdown(answer)
+
+                    status_box.update(label="✅ Done", state="complete", expanded=False)
 
         except requests.exceptions.ConnectionError:
-            answer = "Could not connect to the API. Make sure the server is running."
+            answer = "⚠️ Could not connect to the API. Make sure the server is running."
         except Exception as e:
-            answer = f"Error: {e}"
+            answer = f"⚠️ Error: {e}"
 
-        st.markdown(answer or "I could not find a relevant answer.")
+        answer_placeholder.markdown(answer or "I could not find a relevant answer.")
 
         if trace_id or answer:
             st.session_state.messages.append(
