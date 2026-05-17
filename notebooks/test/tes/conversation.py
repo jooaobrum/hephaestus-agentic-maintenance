@@ -4,9 +4,11 @@ Haiku intent classifier used by router on /reply calls.
 Only needed when you want to route outside the graph (e.g. mark_resolved).
 The recommend_node handles approve/reject/constraint conversationally without this.
 """
+
 from __future__ import annotations
-import json, re
-from typing import Optional, Any
+import json
+import re
+from typing import Optional
 from pydantic import BaseModel
 import anthropic
 
@@ -16,7 +18,7 @@ client = anthropic.AsyncAnthropic()
 
 
 class IntentResult(BaseModel):
-    intent:    str
+    intent: str
     branch_id: Optional[str] = None
     confidence: float = 1.0
 

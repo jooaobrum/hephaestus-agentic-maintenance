@@ -27,8 +27,9 @@ DB_URL = (
 )
 
 
-
-def load_csv_to_table(csv_path: Path, table: str, schema: str, chunksize: int, if_exists: str) -> None:
+def load_csv_to_table(
+    csv_path: Path, table: str, schema: str, chunksize: int, if_exists: str
+) -> None:
     engine = create_engine(DB_URL)
     reader = pd.read_csv(csv_path, chunksize=chunksize)
     total = 0
@@ -44,8 +45,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Ingest CSV into a Postgres table.")
     parser.add_argument("--csv", required=True, type=Path, help="Path to the CSV file.")
     parser.add_argument("--table", required=True, help="Target table name.")
-    parser.add_argument("--schema", default="maintenance", help="Target schema (default: maintenance).")
-    parser.add_argument("--chunksize", type=int, default=50_000, help="Rows per chunk (default: 50000).")
+    parser.add_argument(
+        "--schema", default="maintenance", help="Target schema (default: maintenance)."
+    )
+    parser.add_argument(
+        "--chunksize", type=int, default=50_000, help="Rows per chunk (default: 50000)."
+    )
     parser.add_argument(
         "--if-exists",
         choices=["replace", "append", "fail"],

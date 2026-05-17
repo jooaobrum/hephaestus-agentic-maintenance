@@ -40,7 +40,11 @@ def ensure_collection(qdrant: QdrantClient, collection: str) -> None:
     except Exception:
         qdrant.create_collection(
             collection_name=collection,
-            vectors_config={EMBEDDING_MODEL: VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE)},
+            vectors_config={
+                EMBEDDING_MODEL: VectorParams(
+                    size=VECTOR_SIZE, distance=Distance.COSINE
+                )
+            },
             sparse_vectors_config={"bm25": SparseVectorParams(modifier=Modifier.IDF)},
         )
         print(f"Created collection '{collection}'.")
@@ -49,19 +53,35 @@ def ensure_collection(qdrant: QdrantClient, collection: str) -> None:
 def embed_batch(texts: list[str], oai: OpenAI, batch_size: int) -> list[list[float]]:
     embeddings = []
     for i in range(0, len(texts), batch_size):
-        resp = oai.embeddings.create(input=texts[i: i + batch_size], model=EMBEDDING_MODEL)
+        resp = oai.embeddings.create(
+            input=texts[i : i + batch_size], model=EMBEDDING_MODEL
+        )
         embeddings.extend(e.embedding for e in resp.data)
     return embeddings
 
 
-def upsert_chunks(qdrant: QdrantClient, collection: str, df: pd.DataFrame, embeddings: list[list[float]], batch_size: int) -> None:
+def upsert_chunks(
+    qdrant: QdrantClient,
+    collection: str,
+    df: pd.DataFrame,
+    embeddings: list[list[float]],
+    batch_size: int,
+) -> None:
     now = datetime.utcnow().isoformat()
     points = []
 
     for idx, row in df.iterrows():
         context_text = str(row["context"]) + "\n\n" + str(row["text"])
-        page_numbers = json.loads(row["page_numbers"]) if isinstance(row["page_numbers"], str) else row["page_numbers"]
-        image_paths = json.loads(row["image_paths"]) if isinstance(row["image_paths"], str) else row["image_paths"]
+        page_numbers = (
+            json.loads(row["page_numbers"])
+            if isinstance(row["page_numbers"], str)
+            else row["page_numbers"]
+        )
+        image_paths = (
+            json.loads(row["image_paths"])
+            if isinstance(row["image_paths"], str)
+            else row["image_paths"]
+        )
 
         points.append(
             PointStruct(
@@ -77,10 +97,15 @@ def upsert_chunks(qdrant: QdrantClient, collection: str, df: pd.DataFrame, embed
                     "context": str(row["context"]),
                     "text": str(row["text"]),
                     "page_numbers": page_numbers,
+                    "image_paths": image_paths,
                     "contains_table": bool(row["contains_table"]),
                     "contains_image": bool(row["contains_image"]),
-                    "prev_chunk": int(row["prev_chunk"]) if pd.notna(row["prev_chunk"]) else None,
-                    "next_chunk": int(row["next_chunk"]) if pd.notna(row["next_chunk"]) else None,
+                    "prev_chunk": int(row["prev_chunk"])
+                    if pd.notna(row["prev_chunk"])
+                    else None,
+                    "next_chunk": int(row["next_chunk"])
+                    if pd.notna(row["next_chunk"])
+                    else None,
                     "embedding_model": EMBEDDING_MODEL,
                     "created_at": now,
                 },
@@ -88,11 +113,13 @@ def upsert_chunks(qdrant: QdrantClient, collection: str, df: pd.DataFrame, embed
         )
 
     for i in range(0, len(points), batch_size):
-        qdrant.upsert(collection_name=collection, points=points[i: i + batch_size])
+        qdrant.upsert(collection_name=collection, points=points[i : i + batch_size])
         print(f"  Upserted {min(i + batch_size, len(points))}/{len(points)} points ...")
 
 
-def ingest_procedures(chunks_csv: Path, collection: str, qdrant_url: str, batch_size: int = 100) -> None:
+def ingest_procedures(
+    chunks_csv: Path, collection: str, qdrant_url: str, batch_size: int = 100
+) -> None:
     if not chunks_csv.exists():
         raise FileNotFoundError(f"CSV not found: {chunks_csv}")
 
@@ -105,7 +132,9 @@ def ingest_procedures(chunks_csv: Path, collection: str, qdrant_url: str, batch_
     ensure_collection(qdrant, collection)
 
     print("Embedding ...")
-    context_texts = [str(row["context"]) + "\n\n" + str(row["text"]) for _, row in df.iterrows()]
+    context_texts = [
+        str(row["context"]) + "\n\n" + str(row["text"]) for _, row in df.iterrows()
+    ]
     embeddings = embed_batch(context_texts, oai, batch_size)
 
     print("Upserting ...")
@@ -115,16 +144,21 @@ def ingest_procedures(chunks_csv: Path, collection: str, qdrant_url: str, batch_
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Ingest procedure chunks CSV into Qdrant.")
-    parser.add_argument("--chunks-csv", type=Path, default=Path("data/procedure_chunks.csv"))
+    parser = argparse.ArgumentParser(
+        description="Ingest procedure chunks CSV into Qdrant."
+    )
+    parser.add_argument(
+        "--chunks-csv", type=Path, default=Path("data/procedure_chunks.csv")
+    )
     parser.add_argument("--collection", default="procedures_hybrid")
     parser.add_argument("--qdrant-url", default="http://localhost:6333")
     parser.add_argument("--batch-size", type=int, default=100)
     args = parser.parse_args()
 
-    ingest_procedures(args.chunks_csv, args.collection, args.qdrant_url, args.batch_size)
+    ingest_procedures(
+        args.chunks_csv, args.collection, args.qdrant_url, args.batch_size
+    )
 
 
 if __name__ == "__main__":
     main()
-

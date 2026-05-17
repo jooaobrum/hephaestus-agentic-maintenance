@@ -7,6 +7,7 @@ investigate/router.py — PHILM POC
   POST /investigate/{id}/approve   Approve finding
   POST /investigate/{id}/resolve   Mark which branch was correct
 """
+
 from __future__ import annotations
 import uuid
 from typing import AsyncGenerator
@@ -15,16 +16,22 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from .models import (
-    StartRequest, ReplyRequest, ApproveRequest, MarkResolvedRequest,
-    CompoundFinding, AgentEvent, EventType,
+    StartRequest,
+    ReplyRequest,
+    ApproveRequest,
+    MarkResolvedRequest,
+    CompoundFinding,
+    AgentEvent,
+    EventType,
 )
 from .graph import stream_investigation, resume_investigation, investigation_graph
 
-router    = APIRouter(prefix="/investigate", tags=["investigate"])
-_sessions: dict[str, dict] = {}   # replace with Redis in production
+router = APIRouter(prefix="/investigate", tags=["investigate"])
+_sessions: dict[str, dict] = {}  # replace with Redis in production
 
 
 # ── Helpers ───────────────────────────────────────────────────────
+
 
 def _session(sid: str) -> dict:
     if sid not in _sessions:
@@ -38,13 +45,15 @@ def _graph_state(sid: str):
 
 def _sse(gen: AsyncGenerator, headers: dict = {}) -> StreamingResponse:
     return StreamingResponse(
-        gen, media_type="text/event-stream",
+        gen,
+        media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", **headers},
     )
 
 
 async def _keepalive(gen: AsyncGenerator[str, None], interval: int = 15):
     import asyncio
+
     it = gen.__aiter__()
     while True:
         try:
@@ -57,12 +66,16 @@ async def _keepalive(gen: AsyncGenerator[str, None], interval: int = 15):
 
 # ── Endpoints ─────────────────────────────────────────────────────
 
+
 @router.post("/start")
 async def start(body: StartRequest):
     """Start a new investigation. Session ID returned in X-Session-Id header."""
     sid = str(uuid.uuid4())
-    _sessions[sid] = {"session_id": sid, "machine_id": body.machine_id,
-                       "status": "running"}
+    _sessions[sid] = {
+        "session_id": sid,
+        "machine_id": body.machine_id,
+        "status": "running",
+    }
 
     async def stream():
         try:
@@ -96,10 +109,10 @@ async def get_state(sid: str):
     """Current phase + compound finding. Used for frontend reconnect."""
     _session(sid)
     checkpoint = _graph_state(sid)
-    values     = checkpoint.values if checkpoint else {}
+    values = checkpoint.values if checkpoint else {}
     return {
-        "phase":    values.get("phase"),
-        "context":  values.get("machine_context"),
+        "phase": values.get("phase"),
+        "context": values.get("machine_context"),
         "compound": values.get("compound"),
     }
 

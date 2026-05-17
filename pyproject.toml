@@ -30,7 +30,22 @@ dependencies = [
     "deepagents>=0.4.12",
     "hdbscan>=0.8.43",
     "umap-learn>=0.5.12",
+    "pre-commit>=4.6.0",
 ]
 
 [tool.uv.workspace]
 members = ["apps/api", "apps/chatbot_ui", "apps/db_mcp_server"]
+
+[tool.ruff]
+target-version = "py312"
+exclude = [
+    ".git",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".uv",
+    "node_modules",
+    "notebooks/test",
+]
+
+[tool.ruff.lint]
+ignore = ["E402"]

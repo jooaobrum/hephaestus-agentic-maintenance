@@ -9,7 +9,11 @@ from langgraph.graph import StateGraph, START, END
 
 from agents.multi_agent.config import POSTGRES_URL
 from agents.multi_agent.states import SupervisorState
-from agents.multi_agent.nodes import coordinator_node, troubleshooting_node, summarizer_node
+from agents.multi_agent.nodes import (
+    coordinator_node,
+    troubleshooting_node,
+    summarizer_node,
+)
 from agents.multi_agent.edges import coordinator_edge
 
 _NODE_STATUS = {
@@ -29,11 +33,15 @@ def create_workflow() -> StateGraph:
     workflow.add_node("summarizer", summarizer_node)
 
     workflow.add_edge(START, "coordinator")
-    workflow.add_conditional_edges("coordinator", coordinator_edge, {
-        "troubleshooting": "troubleshooting",
-        "summarizer": "summarizer",
-        END: END,
-    })
+    workflow.add_conditional_edges(
+        "coordinator",
+        coordinator_edge,
+        {
+            "troubleshooting": "troubleshooting",
+            "summarizer": "summarizer",
+            END: END,
+        },
+    )
     workflow.add_edge("troubleshooting", END)
     workflow.add_edge("summarizer", END)
 
@@ -45,7 +53,11 @@ def _process_astream_event(event: dict) -> dict | None:
     evt_type = event.get("event", "")
     node = event.get("metadata", {}).get("langgraph_node", "")
 
-    if evt_type == "on_chain_start" and event.get("name") == node and node in _NODE_STATUS:
+    if (
+        evt_type == "on_chain_start"
+        and event.get("name") == node
+        and node in _NODE_STATUS
+    ):
         return {"event": "status", "data": _NODE_STATUS[node]}
 
     if evt_type == "on_chat_model_stream":
@@ -56,7 +68,11 @@ def _process_astream_event(event: dict) -> dict | None:
                 return {"event": "token", "data": content}
             if isinstance(content, list):
                 text = "".join(
-                    (b.get("text", "") if isinstance(b, dict) else getattr(b, "text", ""))
+                    (
+                        b.get("text", "")
+                        if isinstance(b, dict)
+                        else getattr(b, "text", "")
+                    )
                     for b in content
                 )
                 if text:
@@ -70,7 +86,11 @@ def _process_astream_event(event: dict) -> dict | None:
     if evt_type == "on_chain_end" and node in _TERMINAL_NODES:
         output = event["data"].get("output") or {}
         if isinstance(output, dict):
-            if node == "coordinator" and output.get("coordinator_final") and output.get("answer"):
+            if (
+                node == "coordinator"
+                and output.get("coordinator_final")
+                and output.get("answer")
+            ):
                 return {"event": "answer", "data": output["answer"]}
             if node in ("troubleshooting", "summarizer") and output.get("answer"):
                 return {"event": "answer", "data": output["answer"]}
@@ -100,7 +120,9 @@ async def stream_agent(query: str, thread_id: str):
         await checkpointer.setup()
         graph = create_workflow().compile(checkpointer=checkpointer)
 
-        async for event in graph.astream_events(initial_state, config=config, version="v2"):
+        async for event in graph.astream_events(
+            initial_state, config=config, version="v2"
+        ):
             result = _process_astream_event(event)
             if result is not None:
                 yield result

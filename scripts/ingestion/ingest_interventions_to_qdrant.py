@@ -53,7 +53,9 @@ def build_summary(row: dict) -> str:
 def embed_batch(texts: list[str], client: OpenAI, batch_size: int) -> list[list[float]]:
     embeddings = []
     for i in range(0, len(texts), batch_size):
-        resp = client.embeddings.create(input=texts[i : i + batch_size], model=EMBEDDING_MODEL)
+        resp = client.embeddings.create(
+            input=texts[i : i + batch_size], model=EMBEDDING_MODEL
+        )
         embeddings.extend(e.embedding for e in resp.data)
     return embeddings
 
@@ -65,13 +67,23 @@ def ensure_collection(qdrant: QdrantClient, collection: str) -> None:
     except Exception:
         qdrant.create_collection(
             collection_name=collection,
-            vectors_config={EMBEDDING_MODEL: VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE)},
+            vectors_config={
+                EMBEDDING_MODEL: VectorParams(
+                    size=VECTOR_SIZE, distance=Distance.COSINE
+                )
+            },
             sparse_vectors_config={"bm25": SparseVectorParams(modifier=Modifier.IDF)},
         )
         print(f"Created collection '{collection}'.")
 
 
-def upsert_points(qdrant: QdrantClient, collection: str, records: list[dict], embeddings: list[list[float]], batch_size: int) -> None:
+def upsert_points(
+    qdrant: QdrantClient,
+    collection: str,
+    records: list[dict],
+    embeddings: list[list[float]],
+    batch_size: int,
+) -> None:
     now = datetime.utcnow().isoformat()
     points = []
     for record, dense in zip(records, embeddings):
@@ -99,7 +111,9 @@ def upsert_points(qdrant: QdrantClient, collection: str, records: list[dict], em
         print(f"  Upserted {min(i + batch_size, len(points))}/{len(points)} points ...")
 
 
-def ingest_interventions(csv_path: Path, collection: str, qdrant_url: str, batch_size: int = 100) -> None:
+def ingest_interventions(
+    csv_path: Path, collection: str, qdrant_url: str, batch_size: int = 100
+) -> None:
     if not csv_path.exists():
         raise FileNotFoundError(f"CSV not found: {csv_path}")
 
@@ -107,7 +121,9 @@ def ingest_interventions(csv_path: Path, collection: str, qdrant_url: str, batch
     df = df[df["intervention_type"] == "CM"].copy()
     df["is_valid_fault_code"] = df["fault_code"].apply(validate_fault_code)
     df["summary"] = df.apply(build_summary, axis=1)
-    records = df[["id", "date_start", "machine", "duration_min", "summary"]].to_dict(orient="records")
+    records = df[["id", "date_start", "machine", "duration_min", "summary"]].to_dict(
+        orient="records"
+    )
     print(f"Loaded {len(records)} CM interventions from {csv_path}.")
 
     oai = OpenAI()
@@ -125,7 +141,9 @@ def ingest_interventions(csv_path: Path, collection: str, qdrant_url: str, batch
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Ingest CM interventions into Qdrant hybrid collection.")
+    parser = argparse.ArgumentParser(
+        description="Ingest CM interventions into Qdrant hybrid collection."
+    )
     parser.add_argument("--csv", type=Path, default=Path("data/interventions.csv"))
     parser.add_argument("--collection", default="cm_interventions_hybrid")
     parser.add_argument("--qdrant-url", default="http://localhost:6333")
@@ -137,4 +155,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

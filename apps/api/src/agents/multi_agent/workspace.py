@@ -76,12 +76,16 @@ def _make_file_tools(registry: WorkspaceRegistry) -> list:
         """Write a NEW file. Fails if already exists — use edit_file to update."""
         full = _resolve(file_path, config)
         if full.exists():
-            return f"Cannot write to {file_path}: already exists. Use edit_file instead."
+            return (
+                f"Cannot write to {file_path}: already exists. Use edit_file instead."
+            )
         full.write_text(content)
         return f"Written: {file_path}"
 
     @tool("edit_file")
-    def edit_file_impl(file_path: str, old_string: str, new_string: str, config: RunnableConfig) -> str:
+    def edit_file_impl(
+        file_path: str, old_string: str, new_string: str, config: RunnableConfig
+    ) -> str:
         """Edit an existing file by replacing old_string with new_string (first match)."""
         full = _resolve(file_path, config)
         if not full.exists():
@@ -100,6 +104,7 @@ SUMMARIZER_FILE_TOOLS = _make_file_tools(_summarizer_registry)
 
 
 # ── Offloading helpers ────────────────────────────────────────────────────────
+
 
 def _make_offloader(registry: WorkspaceRegistry):
     def _offload(content: str, vpath: str, config: RunnableConfig) -> str:
@@ -120,6 +125,7 @@ _summarizer_offload = _make_offloader(_summarizer_registry)
 
 # ── Offloading wrappers for troubleshooting tools ─────────────────────────────
 
+
 def make_troubleshooting_offload_tools():
     from agents.multi_agent.tools import (
         get_formatted_procedure_context as _raw_proc_ctx,
@@ -132,61 +138,97 @@ def make_troubleshooting_offload_tools():
 
     @tool
     def get_formatted_procedure_context(
-        query: str, config: RunnableConfig,
-        top_k: int = 5, file_name: str | None = None,
-        contains_table: bool | None = None, expand_window: bool = True,
+        query: str,
+        config: RunnableConfig,
+        top_k: int = 5,
+        file_name: str | None = None,
+        contains_table: bool | None = None,
+        expand_window: bool = True,
     ) -> str:
         """Retrieve troubleshooting procedure docs via hybrid search. Large outputs → /proc_context.md."""
-        result = _raw_proc_ctx.func(query=query, top_k=top_k, file_name=file_name,
-                                    contains_table=contains_table, expand_window=expand_window)
+        result = _raw_proc_ctx.func(
+            query=query,
+            top_k=top_k,
+            file_name=file_name,
+            contains_table=contains_table,
+            expand_window=expand_window,
+        )
         return _troubleshooting_offload(result, "/proc_context.md", config)
 
     @tool
     def get_recent_formatted_cm_context(
-        query: str, machine: str, config: RunnableConfig,
-        top_k: int = 5, days_span: int = 30, date_end: str | None = None,
+        query: str,
+        machine: str,
+        config: RunnableConfig,
+        top_k: int = 5,
+        days_span: int = 30,
+        date_end: str | None = None,
     ) -> str:
         """Retrieve recent CM interventions (30-day window). Always provide date_end. Large outputs → /cm_recent.md."""
-        result = _raw_cm_recent.func(query=query, machine=machine, top_k=top_k,
-                                     days_span=days_span, date_end=date_end)
+        result = _raw_cm_recent.func(
+            query=query,
+            machine=machine,
+            top_k=top_k,
+            days_span=days_span,
+            date_end=date_end,
+        )
         return _troubleshooting_offload(result, "/cm_recent.md", config)
 
     @tool
     def get_long_formatted_cm_context(
-        query: str, config: RunnableConfig,
-        machine: str | None = None, machine_prefix: str | None = None, top_k: int = 10,
+        query: str,
+        config: RunnableConfig,
+        machine: str | None = None,
+        machine_prefix: str | None = None,
+        top_k: int = 10,
     ) -> str:
         """Full-history CM interventions, no time filter. Large outputs → /cm_long.md."""
-        result = _raw_cm_long.func(query=query, machine=machine,
-                                   machine_prefix=machine_prefix, top_k=top_k)
+        result = _raw_cm_long.func(
+            query=query, machine=machine, machine_prefix=machine_prefix, top_k=top_k
+        )
         return _troubleshooting_offload(result, "/cm_long.md", config)
 
     @tool
     def get_sensor_readings_tool(
-        machine: str, start_date: str, end_date: str, config: RunnableConfig,
+        machine: str,
+        start_date: str,
+        end_date: str,
+        config: RunnableConfig,
         tag: str | None = None,
     ) -> str:
         """Raw sensor readings for a machine/time window. Large outputs → /sensor_readings.md."""
-        result = _raw_sensor_readings.func(machine=machine, start_date=start_date,
-                                           end_date=end_date, tag=tag)
+        result = _raw_sensor_readings.func(
+            machine=machine, start_date=start_date, end_date=end_date, tag=tag
+        )
         return _troubleshooting_offload(result, "/sensor_readings.md", config)
 
     @tool
     def get_sensor_timeline_tool(
-        machine: str, start_date: str, end_date: str, tag: str, config: RunnableConfig,
+        machine: str,
+        start_date: str,
+        end_date: str,
+        tag: str,
+        config: RunnableConfig,
     ) -> str:
         """Detailed time-series for one sensor with trend analysis. Large outputs → /sensor_timeline.md."""
-        result = _raw_sensor_timeline.func(machine=machine, start_date=start_date,
-                                           end_date=end_date, tag=tag)
+        result = _raw_sensor_timeline.func(
+            machine=machine, start_date=start_date, end_date=end_date, tag=tag
+        )
         return _troubleshooting_offload(result, "/sensor_timeline.md", config)
 
     @tool
     def get_threshold_events_tool(
-        machine: str, timestamp_start: str, timestamp_end: str, config: RunnableConfig,
+        machine: str,
+        timestamp_start: str,
+        timestamp_end: str,
+        config: RunnableConfig,
     ) -> str:
         """All sensor threshold breaches (WARNING/CRITICAL) in a window. Large outputs → /threshold_events.md."""
-        result = _raw_threshold_events.func(machine=machine, timestamp_start=timestamp_start,
-                                            timestamp_end=timestamp_end)
+        result = _raw_threshold_events.func(
+            machine=machine,
+            timestamp_start=timestamp_start,
+            timestamp_end=timestamp_end,
+        )
         return _troubleshooting_offload(result, "/threshold_events.md", config)
 
     return [
@@ -201,6 +243,7 @@ def make_troubleshooting_offload_tools():
 
 # ── Offloading wrappers for summarizer tools ──────────────────────────────────
 
+
 def make_summarizer_offload_tools():
     from agents.multi_agent.tools import (
         get_formatted_cm_context,
@@ -209,15 +252,23 @@ def make_summarizer_offload_tools():
 
     @tool
     def get_cm_context_summarizer(
-        query: str, config: RunnableConfig,
-        top_k: int = 5, machine: str | None = None,
+        query: str,
+        config: RunnableConfig,
+        top_k: int = 5,
+        machine: str | None = None,
         machine_prefix: str | None = None,
-        date_start: str | None = None, date_end: str | None = None,
+        date_start: str | None = None,
+        date_end: str | None = None,
     ) -> str:
         """Historical CM interventions by semantic search. Large outputs → /cm_history.md."""
-        result = get_formatted_cm_context.func(query=query, top_k=top_k, machine=machine,
-                                               machine_prefix=machine_prefix,
-                                               date_start=date_start, date_end=date_end)
+        result = get_formatted_cm_context.func(
+            query=query,
+            top_k=top_k,
+            machine=machine,
+            machine_prefix=machine_prefix,
+            date_start=date_start,
+            date_end=date_end,
+        )
         return _summarizer_offload(result, "/cm_history.md", config)
 
     @tool
@@ -237,11 +288,20 @@ def make_summarizer_offload_tools():
         """Validate a built known-case template before saving. Returns VALID or blocking issues."""
         issues = []
         try:
-            data = json.loads(template_json) if isinstance(template_json, str) else template_json
+            data = (
+                json.loads(template_json)
+                if isinstance(template_json, str)
+                else template_json
+            )
         except (json.JSONDecodeError, TypeError):
             return "INVALID: template_json is not valid JSON."
-        for field in ["symptom_name", "description", "root_causes",
-                      "affected_machines", "representative_intervention_ids"]:
+        for field in [
+            "symptom_name",
+            "description",
+            "root_causes",
+            "affected_machines",
+            "representative_intervention_ids",
+        ]:
             if not data.get(field):
                 issues.append(f"Missing or empty: '{field}'")
         int_ids = data.get("representative_intervention_ids", [])
@@ -251,6 +311,10 @@ def make_summarizer_offload_tools():
             for id_ in int_ids:
                 if not str(id_).startswith("INT-"):
                     issues.append(f"Invalid ID format: '{id_}' (expected INT-XXXX)")
-        return "VALID" if not issues else "INVALID:\n" + "\n".join(f"- {i}" for i in issues)
+        return (
+            "VALID"
+            if not issues
+            else "INVALID:\n" + "\n".join(f"- {i}" for i in issues)
+        )
 
     return [get_cm_context_summarizer, get_known_case_templates_tool, validate_template]

@@ -42,6 +42,7 @@ Write concisely. This context will be prepended to the chunk text before embeddi
 # Chunking
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class Chunk:
     chunk_number: int
@@ -107,7 +108,10 @@ def chunk_document(ocr_data: dict, file_name: str) -> list[Chunk]:
         offset = 0
         for page in pages:
             page_md = _strip_header_footer(page["markdown"])
-            if full_markdown[start:end] in full_markdown[offset: offset + len(page_md) + 10]:
+            if (
+                full_markdown[start:end]
+                in full_markdown[offset : offset + len(page_md) + 10]
+            ):
                 page_numbers.append(page.get("index", 0))
             offset += len(page_md) + 2
 
@@ -136,6 +140,7 @@ def chunk_document(ocr_data: dict, file_name: str) -> list[Chunk]:
 # ---------------------------------------------------------------------------
 # LLM Context Enrichment
 # ---------------------------------------------------------------------------
+
 
 class ChunkContext(BaseModel):
     context: str = Field(
@@ -169,6 +174,7 @@ def generate_context(chunk: Chunk, full_doc_text: str, oai: OpenAI) -> str:
 # Main
 # ---------------------------------------------------------------------------
 
+
 def extract_procedures(json_dir: Path, output_csv: Path) -> None:
     if not json_dir.exists():
         raise FileNotFoundError(f"JSON directory not found: {json_dir}")
@@ -186,11 +192,15 @@ def extract_procedures(json_dir: Path, output_csv: Path) -> None:
         ocr_data = json.loads(json_path.read_text())
         chunks = chunk_document(ocr_data, json_path.stem)
 
-        full_doc_text = "\n\n".join(p.get("markdown", "") for p in ocr_data.get("pages", []))
+        full_doc_text = "\n\n".join(
+            p.get("markdown", "") for p in ocr_data.get("pages", [])
+        )
 
         for j, chunk in enumerate(chunks):
             chunk.context = generate_context(chunk, full_doc_text, oai)
-            print(f"  [{j + 1}/{len(chunks)}] context generated for: {chunk.section_title[:60]}")
+            print(
+                f"  [{j + 1}/{len(chunks)}] context generated for: {chunk.section_title[:60]}"
+            )
 
         all_chunks.extend(chunks)
 
@@ -218,9 +228,15 @@ def extract_procedures(json_dir: Path, output_csv: Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Extract and enrich chunks from procedure OCR JSONs.")
-    parser.add_argument("--json-dir", type=Path, default=Path("data/procedures_extracted"))
-    parser.add_argument("--output-csv", type=Path, default=Path("data/procedure_chunks.csv"))
+    parser = argparse.ArgumentParser(
+        description="Extract and enrich chunks from procedure OCR JSONs."
+    )
+    parser.add_argument(
+        "--json-dir", type=Path, default=Path("data/procedures_extracted")
+    )
+    parser.add_argument(
+        "--output-csv", type=Path, default=Path("data/procedure_chunks.csv")
+    )
     args = parser.parse_args()
 
     extract_procedures(args.json_dir, args.output_csv)
@@ -228,4 +244,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

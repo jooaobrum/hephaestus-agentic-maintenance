@@ -21,7 +21,6 @@ DB_URL = (
 SQL_FILE = Path(__file__).resolve().parent / "init_db.sql"
 
 
-
 def main() -> None:
     engine = create_engine(DB_URL)
     print("Running init_db.sql ...")

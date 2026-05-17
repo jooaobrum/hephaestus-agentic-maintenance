@@ -15,7 +15,6 @@ def prompt_template_config(path: str, name: str) -> str:
 
 
 def prompt_template_registry(name: str):
-
     ls_client = Client()
 
     ls_template = ls_client.pull_prompt("retrieval_generation")

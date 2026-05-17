@@ -1,8 +1,7 @@
 import ast
 import inspect
 from typing import Dict, Any
-from langchain_core.messages import AIMessage, ToolMessage
-import json
+from langchain_core.messages import AIMessage
 from IPython.display import Image, display
 
 
@@ -10,7 +9,6 @@ from IPython.display import Image, display
 
 
 def format_ai_message(response):
-
     if response.tool_calls:
         tool_calls = []
         for i, tc in enumerate(response.tool_calls):
@@ -179,13 +177,11 @@ def display_graph(graph):
 
 
 def postprocess_response(response, final_response_class, agent_name=None):
-
     final_answer = False
     answer = ""
     references = []
 
     def _sanitise_response(response, prefix):
-
         for tool_call in response.tool_calls:
             answer = tool_call.get("args").get("answer")
 

@@ -1,6 +1,5 @@
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy import create_engine, text
 
 _ROOT = Path(__file__).resolve().parents[4]
 

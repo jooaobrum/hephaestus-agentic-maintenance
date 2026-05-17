@@ -202,7 +202,11 @@ class TroubleshootingSession:
         return "\n".join(lines)
 
     def _prepare_config(self, extra_config: RunnableConfig | None = None) -> dict:
-        cfg = merge_configs(self.config, extra_config) if extra_config else self.config.copy()
+        cfg = (
+            merge_configs(self.config, extra_config)
+            if extra_config
+            else self.config.copy()
+        )
         cfg["configurable"] = cfg.get("configurable", {}).copy()
         cfg["configurable"]["thread_id"] = self.thread_id
         cfg["configurable"].pop("checkpoint_id", None)
@@ -210,7 +214,10 @@ class TroubleshootingSession:
         return cfg
 
     def start(
-        self, task: str | None = None, period: str | None = None, extra_config: RunnableConfig | None = None
+        self,
+        task: str | None = None,
+        period: str | None = None,
+        extra_config: RunnableConfig | None = None,
     ) -> "TroubleshootingSession":
         cfg = self._prepare_config(extra_config)
         self._result = _troubleshooting_agent.invoke(
@@ -305,14 +312,23 @@ class SummarizerSession:
         return "Hello! I need help building a known case template."
 
     def _prepare_config(self, extra_config: RunnableConfig | None = None) -> dict:
-        cfg = merge_configs(self.config, extra_config) if extra_config else self.config.copy()
+        cfg = (
+            merge_configs(self.config, extra_config)
+            if extra_config
+            else self.config.copy()
+        )
         cfg["configurable"] = cfg.get("configurable", {}).copy()
         cfg["configurable"]["thread_id"] = self.thread_id
         cfg["configurable"].pop("checkpoint_id", None)
         cfg["configurable"].pop("checkpoint_ns", None)
         return cfg
 
-    def start(self, task: str | None = None, period: str | None = None, extra_config: RunnableConfig | None = None) -> "SummarizerSession":
+    def start(
+        self,
+        task: str | None = None,
+        period: str | None = None,
+        extra_config: RunnableConfig | None = None,
+    ) -> "SummarizerSession":
         cfg = self._prepare_config(extra_config)
         self._result = _summarizer_agent.invoke(
             {"messages": [HumanMessage(content=self._first_message(task, period))]},

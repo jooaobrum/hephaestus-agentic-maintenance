@@ -80,6 +80,5 @@ def main() -> None:
     parse_procedures(args.input_dir, args.output_dir)
 
 
-
 if __name__ == "__main__":
     main()

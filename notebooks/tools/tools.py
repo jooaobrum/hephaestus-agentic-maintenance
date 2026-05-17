@@ -8,7 +8,7 @@ import uuid
 from openai import OpenAI
 from qdrant_client import QdrantClient
 from sqlalchemy import create_engine, text
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
 import pandas as pd
 

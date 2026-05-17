@@ -1,7 +1,7 @@
 """Test that investigation state persists correctly across turns."""
 
 from langchain_core.messages import AIMessage, ToolMessage, HumanMessage
-from langchain_core.tools import tool
+
 
 # Simulate the function from sessions.py
 def _summarize_investigation(result: dict) -> str:
@@ -39,9 +39,17 @@ def test_investigation_status_extraction():
             AIMessage(
                 content="Starting diagnosis...",
                 tool_calls=[
-                    {"name": "check_machine_exists", "args": {"machine_id": "XYZ"}, "id": "1"},
-                    {"name": "get_sensor_anomaly_summary", "args": {"machine_id": "XYZ"}, "id": "2"},
-                ]
+                    {
+                        "name": "check_machine_exists",
+                        "args": {"machine_id": "XYZ"},
+                        "id": "1",
+                    },
+                    {
+                        "name": "get_sensor_anomaly_summary",
+                        "args": {"machine_id": "XYZ"},
+                        "id": "2",
+                    },
+                ],
             ),
             ToolMessage(content="Machine exists", tool_call_id="1"),
             ToolMessage(content="Temp sensor above threshold", tool_call_id="2"),
@@ -53,8 +61,12 @@ def test_investigation_status_extraction():
 
     assert summary, "Should extract investigation status"
     assert "check_machine_exists" in summary, "Should include check_machine_exists"
-    assert "get_sensor_anomaly_summary" in summary, "Should include get_sensor_anomaly_summary"
-    assert "[INVESTIGATION STATUS]" in summary, "Should have investigation status marker"
+    assert (
+        "get_sensor_anomaly_summary" in summary
+    ), "Should include get_sensor_anomaly_summary"
+    assert (
+        "[INVESTIGATION STATUS]" in summary
+    ), "Should have investigation status marker"
 
     print("✓ Investigation status correctly extracted")
     print(f"  Summary: {summary}")
@@ -65,9 +77,17 @@ def test_investigation_status_extraction():
             AIMessage(
                 content="...",
                 tool_calls=[
-                    {"name": "check_machine_exists", "args": {"machine_id": "XYZ"}, "id": "1"},
-                    {"name": "check_machine_exists", "args": {"machine_id": "XYZ"}, "id": "2"},  # Duplicate
-                ]
+                    {
+                        "name": "check_machine_exists",
+                        "args": {"machine_id": "XYZ"},
+                        "id": "1",
+                    },
+                    {
+                        "name": "check_machine_exists",
+                        "args": {"machine_id": "XYZ"},
+                        "id": "2",
+                    },  # Duplicate
+                ],
             ),
         ]
     }

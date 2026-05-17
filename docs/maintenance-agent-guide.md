@@ -1,7 +1,7 @@
 # Agent — Maintenance Investigation Assistant
 ## Practical Guide for Technicians and Engineers
 
-**Who this is for:**  
+**Who this is for:**
 Technicians, operators, and engineers using Agent in daily maintenance work.
 
 No AI or technical background is required.

@@ -10,7 +10,10 @@ Evolution seam: sensor_id on questions.
 """
 
 from __future__ import annotations
-import asyncio, json, re, uuid
+import asyncio
+import json
+import re
+import uuid
 from typing import AsyncGenerator
 
 import anthropic
@@ -19,15 +22,20 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import interrupt, Command
 
 from .models import (
-    AgentEvent, EventType, Phase,
-    MachineContext, EvidenceItem,
-    CompoundFinding, HypothesisBranch, RecommendedAction,
-    ValidationQuestion, DiscriminationQuestion,
+    AgentEvent,
+    EventType,
+    Phase,
+    MachineContext,
+    EvidenceItem,
+    CompoundFinding,
+    HypothesisBranch,
+    ValidationQuestion,
+    DiscriminationQuestion,
     InvestigationState,
 )
-from .tools import execute_tool   # pgvector RAG — implement separately
+from .tools import execute_tool  # pgvector RAG — implement separately
 
-client       = anthropic.AsyncAnthropic()
+client = anthropic.AsyncAnthropic()
 checkpointer = MemorySaver()
 
 
@@ -42,13 +50,14 @@ ASK_USER = {
         "Prefer structured options. Never ask what you can look up."
     ),
     "input_schema": {
-        "type": "object", "required": ["question", "intent"],
+        "type": "object",
+        "required": ["question", "intent"],
         "properties": {
             "question": {"type": "string"},
-            "intent":   {"type": "string"},
-            "options":  {"type": "array", "items": {"type": "string"}},
-        }
-    }
+            "intent": {"type": "string"},
+            "options": {"type": "array", "items": {"type": "string"}},
+        },
+    },
 }
 
 SUBMIT_CONTEXT = {
@@ -70,41 +79,61 @@ SUBMIT_FINDING = {
         "type": "object",
         "required": ["symptom", "branches", "recommended_first_check"],
         "properties": {
-            "symptom":                  {"type": "string"},
-            "recommended_first_check":  {"type": "string"},
+            "symptom": {"type": "string"},
+            "recommended_first_check": {"type": "string"},
             "branches": {
-                "type": "array", "minItems": 1, "maxItems": 4,
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 4,
                 "items": {
                     "type": "object",
-                    "required": ["id", "cause", "confidence",
-                                 "discriminating_check", "action_plan"],
+                    "required": [
+                        "id",
+                        "cause",
+                        "confidence",
+                        "discriminating_check",
+                        "action_plan",
+                    ],
                     "properties": {
-                        "id":                   {"type": "string"},
-                        "cause":                {"type": "string"},
-                        "confidence":           {"type": "number"},
-                        "escalate_to_expert":   {"type": "boolean",
-                                                 "description": "True when fewer than 3 historical cases found."},
-                        "discriminating_check": {"type": "string",
-                                                 "description": "Single observation that confirms or kills this branch."},
+                        "id": {"type": "string"},
+                        "cause": {"type": "string"},
+                        "confidence": {"type": "number"},
+                        "escalate_to_expert": {
+                            "type": "boolean",
+                            "description": "True when fewer than 3 historical cases found.",
+                        },
+                        "discriminating_check": {
+                            "type": "string",
+                            "description": "Single observation that confirms or kills this branch.",
+                        },
                         "action_plan": {
                             "type": "array",
                             "items": {
                                 "type": "object",
                                 "required": ["priority", "action"],
                                 "properties": {
-                                    "priority":    {"type": "string",
-                                                    "enum": ["immediate","short_term","preventive"]},
-                                    "action":      {"type": "string"},
-                                    "component":   {"type": "string"},
-                                    "parts_needed":{"type": "array","items":{"type":"string"}},
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+                                    "priority": {
+                                        "type": "string",
+                                        "enum": [
+                                            "immediate",
+                                            "short_term",
+                                            "preventive",
+                                        ],
+                                    },
+                                    "action": {"type": "string"},
+                                    "component": {"type": "string"},
+                                    "parts_needed": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
 }
 
 INVESTIGATE_TOOLS = [
@@ -112,23 +141,25 @@ INVESTIGATE_TOOLS = [
         "name": "search_procedures",
         "description": "Search maintenance procedures for this symptom and machine family.",
         "input_schema": {
-            "type": "object", "required": ["query"],
+            "type": "object",
+            "required": ["query"],
             "properties": {
-                "query":  {"type": "string"},
+                "query": {"type": "string"},
                 "family": {"type": "string"},
-            }
-        }
+            },
+        },
     },
     {
         "name": "search_past_interventions",
         "description": "Search historical maintenance records for similar failures.",
         "input_schema": {
-            "type": "object", "required": ["query"],
+            "type": "object",
+            "required": ["query"],
             "properties": {
-                "query":  {"type": "string"},
+                "query": {"type": "string"},
                 "family": {"type": "string"},
-            }
-        }
+            },
+        },
     },
     ASK_USER,
     SUBMIT_FINDING,
@@ -138,6 +169,7 @@ INVESTIGATE_TOOLS = [
 # ══════════════════════════════════════════════════════════════════
 # Evolution seam helper
 # ══════════════════════════════════════════════════════════════════
+
 
 async def _resolve(
     q: ValidationQuestion | DiscriminationQuestion,
@@ -149,8 +181,7 @@ async def _resolve(
     """
     if q.sensor_id:
         answer, _ = await execute_tool(
-            "evaluate_sensor_check",
-            {"sensor_id": q.sensor_id}, ""
+            "evaluate_sensor_check", {"sensor_id": q.sensor_id}, ""
         )
         return str(answer), None
 
@@ -169,6 +200,7 @@ async def _resolve(
 # ══════════════════════════════════════════════════════════════════
 # Helpers
 # ══════════════════════════════════════════════════════════════════
+
 
 def _ctx_block(ctx: MachineContext) -> str:
     lines = [
@@ -190,8 +222,9 @@ def _parse_json(text: str) -> dict:
     return json.loads(clean)
 
 
-async def _interrupt_user(question: str, options: list[str] | None,
-                           phase: Phase, intent: str = "") -> tuple[str, AgentEvent]:
+async def _interrupt_user(
+    question: str, options: list[str] | None, phase: Phase, intent: str = ""
+) -> tuple[str, AgentEvent]:
     iid = str(uuid.uuid4())
     evt = AgentEvent(
         type=EventType.INTERRUPT,
@@ -224,7 +257,7 @@ Call submit_context when ready."""
 
 
 async def context_gathering_node(state: InvestigationState) -> dict:
-    events   = [AgentEvent(type=EventType.PHASE_CHANGE, phase=Phase.CONTEXT_GATHERING)]
+    events = [AgentEvent(type=EventType.PHASE_CHANGE, phase=Phase.CONTEXT_GATHERING)]
     messages = list(state.messages) or [
         {"role": "user", "content": "I need help troubleshooting a machine problem."}
     ]
@@ -238,8 +271,8 @@ async def context_gathering_node(state: InvestigationState) -> dict:
             messages=messages,
         )
 
-        content  = []
-        done     = False
+        content = []
+        done = False
 
         for block in response.content:
             if block.type == "text":
@@ -247,8 +280,14 @@ async def context_gathering_node(state: InvestigationState) -> dict:
                 content.append({"type": "text", "text": block.text})
 
             elif block.type == "tool_use":
-                content.append({"type": "tool_use", "id": block.id,
-                                 "name": block.name, "input": block.input})
+                content.append(
+                    {
+                        "type": "tool_use",
+                        "id": block.id,
+                        "name": block.name,
+                        "input": block.input,
+                    }
+                )
 
                 if block.name == "ask_user":
                     answer, evt = await _interrupt_user(
@@ -259,29 +298,46 @@ async def context_gathering_node(state: InvestigationState) -> dict:
                     )
                     events.append(evt)
                     messages.append({"role": "assistant", "content": content})
-                    messages.append({"role": "user", "content": [
-                        {"type": "tool_result", "tool_use_id": block.id, "content": answer}
-                    ]})
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": block.id,
+                                    "content": answer,
+                                }
+                            ],
+                        }
+                    )
                     content = []
 
                 elif block.name == "submit_context":
                     ctx = MachineContext(**block.input)
                     events.append(AgentEvent(type=EventType.CONTEXT_READY, context=ctx))
                     messages.append({"role": "assistant", "content": content})
-                    messages.append({"role": "user", "content": [
-                        {"type": "tool_result", "tool_use_id": block.id,
-                         "content": "Context recorded. Starting investigation."}
-                    ]})
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": block.id,
+                                    "content": "Context recorded. Starting investigation.",
+                                }
+                            ],
+                        }
+                    )
                     done = True
                     break
 
         if done:
             return {
-                "phase":           Phase.INVESTIGATE,
+                "phase": Phase.INVESTIGATE,
                 "machine_context": ctx,
-                "machine_id":      ctx.machine_id or "unknown",
-                "messages":        messages,
-                "_events":         events,
+                "machine_id": ctx.machine_id or "unknown",
+                "messages": messages,
+                "_events": events,
             }
         if content:
             messages.append({"role": "assistant", "content": content})
@@ -290,6 +346,7 @@ async def context_gathering_node(state: InvestigationState) -> dict:
 # ══════════════════════════════════════════════════════════════════
 # Node 2 — INVESTIGATE
 # ══════════════════════════════════════════════════════════════════
+
 
 def _investigate_sys(ctx: MachineContext) -> str:
     return f"""You are a maintenance AI performing root cause analysis.
@@ -322,20 +379,30 @@ RULES:
 
 
 async def investigate_node(state: InvestigationState) -> dict:
-    events    = [AgentEvent(type=EventType.PHASE_CHANGE, phase=Phase.INVESTIGATE)]
-    ctx       = state.machine_context
-    messages  = list(state.messages)
-    evidence  = list(state.evidence)
+    events = [AgentEvent(type=EventType.PHASE_CHANGE, phase=Phase.INVESTIGATE)]
+    ctx = state.machine_context
+    messages = list(state.messages)
+    evidence = list(state.evidence)
     iteration = 0
 
     # Parallel baseline — search both sources simultaneously
-    events.append(AgentEvent(type=EventType.TEXT_DELTA,
-                              content="Loading procedures and intervention history..."))
+    events.append(
+        AgentEvent(
+            type=EventType.TEXT_DELTA,
+            content="Loading procedures and intervention history...",
+        )
+    )
     baseline = await asyncio.gather(
-        execute_tool("search_procedures",
-                     {"query": ctx.symptom, "family": ctx.family or ""}, state.machine_id),
-        execute_tool("search_past_interventions",
-                     {"query": ctx.symptom, "family": ctx.family or ""}, state.machine_id),
+        execute_tool(
+            "search_procedures",
+            {"query": ctx.symptom, "family": ctx.family or ""},
+            state.machine_id,
+        ),
+        execute_tool(
+            "search_past_interventions",
+            {"query": ctx.symptom, "family": ctx.family or ""},
+            state.machine_id,
+        ),
         return_exceptions=True,
     )
     for name, res in zip(["search_procedures", "search_past_interventions"], baseline):
@@ -344,10 +411,16 @@ async def investigate_node(state: InvestigationState) -> dict:
         result, ev = res
         if ev:
             evidence.append(ev)
-        events.append(AgentEvent(type=EventType.TOOL_RESULT,
-                                  tool_name=name, tool_result=json.dumps(result)[:400]))
-        messages.append({"role": "user",
-                          "content": f"[Baseline — {name}]:\n{json.dumps(result)}"})
+        events.append(
+            AgentEvent(
+                type=EventType.TOOL_RESULT,
+                tool_name=name,
+                tool_result=json.dumps(result)[:400],
+            )
+        )
+        messages.append(
+            {"role": "user", "content": f"[Baseline — {name}]:\n{json.dumps(result)}"}
+        )
 
     # ReAct loop
     system = _investigate_sys(ctx)
@@ -362,21 +435,31 @@ async def investigate_node(state: InvestigationState) -> dict:
             messages=messages,
         )
 
-        acontent  = []
-        tool_res  = []
+        acontent = []
+        tool_res = []
 
         for block in response.content:
             if block.type == "text":
-                tag = (EventType.TEXT_DELTA if "[HYPOTHESIS UPDATE]"
-                       not in block.text else EventType.TEXT_DELTA)
+                tag = (
+                    EventType.TEXT_DELTA
+                    if "[HYPOTHESIS UPDATE]" not in block.text
+                    else EventType.TEXT_DELTA
+                )
                 events.append(AgentEvent(type=tag, content=block.text))
                 acontent.append({"type": "text", "text": block.text})
 
             elif block.type == "tool_use":
-                acontent.append({"type": "tool_use", "id": block.id,
-                                  "name": block.name, "input": block.input})
-                events.append(AgentEvent(type=EventType.TOOL_CALL,
-                                          tool_name=block.name))
+                acontent.append(
+                    {
+                        "type": "tool_use",
+                        "id": block.id,
+                        "name": block.name,
+                        "input": block.input,
+                    }
+                )
+                events.append(
+                    AgentEvent(type=EventType.TOOL_CALL, tool_name=block.name)
+                )
 
                 if block.name == "ask_user":
                     answer, evt = await _interrupt_user(
@@ -394,47 +477,73 @@ async def investigate_node(state: InvestigationState) -> dict:
                         source="ask_user",
                     )
                     evidence.append(ev)
-                    events.append(AgentEvent(type=EventType.TOOL_RESULT,
-                                              tool_name="ask_user",
-                                              tool_result=answer,
-                                              evidence=ev))
+                    events.append(
+                        AgentEvent(
+                            type=EventType.TOOL_RESULT,
+                            tool_name="ask_user",
+                            tool_result=answer,
+                            evidence=ev,
+                        )
+                    )
                     messages.append({"role": "assistant", "content": acontent})
-                    messages.append({"role": "user", "content": [
-                        {"type": "tool_result", "tool_use_id": block.id, "content": answer}
-                    ]})
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": block.id,
+                                    "content": answer,
+                                }
+                            ],
+                        }
+                    )
                     acontent = []
                     tool_res = []
                     iteration -= 1
                     continue
 
                 if block.name == "submit_compound_finding":
-                    branches = [HypothesisBranch(**b)
-                                for b in block.input.pop("branches")]
+                    branches = [
+                        HypothesisBranch(**b) for b in block.input.pop("branches")
+                    ]
                     compound = CompoundFinding(
                         session_id=state.session_id,
                         machine_id=state.machine_id,
                         branches=branches,
                         **block.input,
                     )
-                    events.append(AgentEvent(type=EventType.COMPOUND_FINDING,
-                                              compound=compound))
+                    events.append(
+                        AgentEvent(type=EventType.COMPOUND_FINDING, compound=compound)
+                    )
                     return {
-                        "phase":    Phase.HYPOTHESIZE,
+                        "phase": Phase.HYPOTHESIZE,
                         "compound": compound,
                         "evidence": evidence,
                         "messages": messages,
-                        "_events":  events,
+                        "_events": events,
                     }
 
-                result, ev = await execute_tool(block.name, block.input, state.machine_id)
+                result, ev = await execute_tool(
+                    block.name, block.input, state.machine_id
+                )
                 if ev:
                     evidence.append(ev)
-                events.append(AgentEvent(type=EventType.TOOL_RESULT,
-                                          tool_name=block.name,
-                                          tool_result=json.dumps(result)[:400],
-                                          evidence=ev))
-                tool_res.append({"type": "tool_result", "tool_use_id": block.id,
-                                  "content": json.dumps(result)})
+                events.append(
+                    AgentEvent(
+                        type=EventType.TOOL_RESULT,
+                        tool_name=block.name,
+                        tool_result=json.dumps(result)[:400],
+                        evidence=ev,
+                    )
+                )
+                tool_res.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": json.dumps(result),
+                    }
+                )
 
         if acontent:
             messages.append({"role": "assistant", "content": acontent})
@@ -443,18 +552,23 @@ async def investigate_node(state: InvestigationState) -> dict:
         if response.stop_reason == "end_turn":
             break
 
-    return {"phase": Phase.HYPOTHESIZE, "evidence": evidence,
-            "messages": messages, "_events": events}
+    return {
+        "phase": Phase.HYPOTHESIZE,
+        "evidence": evidence,
+        "messages": messages,
+        "_events": events,
+    }
 
 
 # ══════════════════════════════════════════════════════════════════
 # Node 3 — HYPOTHESIZE  (revision node)
 # ══════════════════════════════════════════════════════════════════
 
+
 async def hypothesize_node(state: InvestigationState) -> dict:
     """Called on rejection or when validate finds an alternative hypothesis."""
     events = [AgentEvent(type=EventType.PHASE_CHANGE, phase=Phase.HYPOTHESIZE)]
-    ctx    = state.machine_context
+    ctx = state.machine_context
     reason = state.rejection_reason or "Revision requested."
 
     response = await client.messages.create(
@@ -487,13 +601,15 @@ All branches must reflect the evidence and the revision reason.""",
                 branches=branches,
                 **block.input,
             )
-            events.append(AgentEvent(type=EventType.COMPOUND_FINDING, compound=compound))
+            events.append(
+                AgentEvent(type=EventType.COMPOUND_FINDING, compound=compound)
+            )
 
     return {
-        "phase":            Phase.VALIDATE,
-        "compound":         compound,
+        "phase": Phase.VALIDATE,
+        "compound": compound,
         "rejection_reason": None,
-        "_events":          events,
+        "_events": events,
     }
 
 
@@ -501,14 +617,16 @@ All branches must reflect the evidence and the revision reason.""",
 # Node 4 — VALIDATE
 # ══════════════════════════════════════════════════════════════════
 
+
 async def validate_node(state: InvestigationState) -> dict:
-    events     = [AgentEvent(type=EventType.PHASE_CHANGE, phase=Phase.VALIDATE)]
-    compound   = state.compound
+    events = [AgentEvent(type=EventType.PHASE_CHANGE, phase=Phase.VALIDATE)]
+    compound = state.compound
     confidence = compound.top_branch.confidence
 
     # Generate questions
     r = await client.messages.create(
-        model="claude-sonnet-4-6", max_tokens=1200,
+        model="claude-sonnet-4-6",
+        max_tokens=1200,
         system=f"""Generate 2-3 validation questions for this hypothesis.
 
 TOP HYPOTHESIS: {compound.top_branch.cause} ({confidence:.0%})
@@ -531,8 +649,9 @@ Return JSON only:
     )
 
     try:
-        questions = [ValidationQuestion(**q)
-                     for q in _parse_json(r.content[0].text)["questions"]]
+        questions = [
+            ValidationQuestion(**q) for q in _parse_json(r.content[0].text)["questions"]
+        ]
     except Exception:
         questions = []
 
@@ -541,18 +660,27 @@ Return JSON only:
         answer, evt = await _resolve(q, Phase.VALIDATE)
         if evt:
             events.append(evt)
-        events.append(AgentEvent(type=EventType.TEXT_DELTA,
-                                  content=f"[VALIDATE Q{i+1}] {q.question} → {answer}"))
-        delta      = q.confidence_deltas.get(answer, 0.0)
+        events.append(
+            AgentEvent(
+                type=EventType.TEXT_DELTA,
+                content=f"[VALIDATE Q{i+1}] {q.question} → {answer}",
+            )
+        )
+        delta = q.confidence_deltas.get(answer, 0.0)
         confidence = max(0.0, min(1.0, confidence + delta))
-        events.append(AgentEvent(type=EventType.BRANCH_UPDATE,
-                                  meta={"confidence": confidence, "delta": delta, "step": i+1}))
+        events.append(
+            AgentEvent(
+                type=EventType.BRANCH_UPDATE,
+                meta={"confidence": confidence, "delta": delta, "step": i + 1},
+            )
+        )
         if delta < -0.15:
             alt_found = True
 
     # Holistic re-assessment
     ra = await client.messages.create(
-        model="claude-sonnet-4-6", max_tokens=200,
+        model="claude-sonnet-4-6",
+        max_tokens=200,
         system=f"""Reassess hypothesis after validation.
 Hypothesis: {compound.top_branch.cause}
 Running confidence: {confidence:.2f}
@@ -566,27 +694,37 @@ Return JSON only:
     try:
         ra_data = _parse_json(ra.content[0].text)
     except Exception:
-        ra_data = {"final_confidence": confidence, "routing": "discriminate", "reason": "fallback"}
+        ra_data = {
+            "final_confidence": confidence,
+            "routing": "discriminate",
+            "reason": "fallback",
+        }
 
     compound.branches[0].confidence = ra_data["final_confidence"]
     if alt_found:
         ra_data["routing"] = "re_hypothesize"
 
     events.append(AgentEvent(type=EventType.COMPOUND_FINDING, compound=compound))
-    events.append(AgentEvent(type=EventType.TEXT_DELTA,
-                              content=f"Validation done — {ra_data['final_confidence']:.0%}. {ra_data['reason']}"))
+    events.append(
+        AgentEvent(
+            type=EventType.TEXT_DELTA,
+            content=f"Validation done — {ra_data['final_confidence']:.0%}. {ra_data['reason']}",
+        )
+    )
 
     next_phase = {
-        "discriminate":   Phase.DISCRIMINATE,
+        "discriminate": Phase.DISCRIMINATE,
         "re_investigate": Phase.INVESTIGATE,
         "re_hypothesize": Phase.HYPOTHESIZE,
     }.get(ra_data["routing"], Phase.DISCRIMINATE)
 
     return {
-        "phase":            next_phase,
-        "compound":         compound,
-        "rejection_reason": ra_data["reason"] if ra_data["routing"] != "discriminate" else None,
-        "_events":          events,
+        "phase": next_phase,
+        "compound": compound,
+        "rejection_reason": ra_data["reason"]
+        if ra_data["routing"] != "discriminate"
+        else None,
+        "_events": events,
     }
 
 
@@ -594,8 +732,9 @@ Return JSON only:
 # Node 5 — DISCRIMINATE
 # ══════════════════════════════════════════════════════════════════
 
+
 async def discriminate_node(state: InvestigationState) -> dict:
-    events   = [AgentEvent(type=EventType.PHASE_CHANGE, phase=Phase.DISCRIMINATE)]
+    events = [AgentEvent(type=EventType.PHASE_CHANGE, phase=Phase.DISCRIMINATE)]
     compound = state.compound
 
     if len(compound.branches) <= 1:
@@ -606,7 +745,8 @@ async def discriminate_node(state: InvestigationState) -> dict:
         for b in compound.branches
     )
     r = await client.messages.create(
-        model="claude-sonnet-4-6", max_tokens=1200,
+        model="claude-sonnet-4-6",
+        max_tokens=1200,
         system=f"""Generate 2-3 questions to discriminate between competing hypotheses.
 
 BRANCHES:
@@ -629,8 +769,10 @@ Return JSON only:
     )
 
     try:
-        questions = [DiscriminationQuestion(**q)
-                     for q in _parse_json(r.content[0].text)["questions"]]
+        questions = [
+            DiscriminationQuestion(**q)
+            for q in _parse_json(r.content[0].text)["questions"]
+        ]
     except Exception:
         questions = []
 
@@ -638,21 +780,34 @@ Return JSON only:
         answer, evt = await _resolve(q, Phase.DISCRIMINATE)
         if evt:
             events.append(evt)
-        events.append(AgentEvent(type=EventType.TEXT_DELTA,
-                                  content=f"[DISCRIM Q{i+1}] {q.question} → {answer}"))
+        events.append(
+            AgentEvent(
+                type=EventType.TEXT_DELTA,
+                content=f"[DISCRIM Q{i+1}] {q.question} → {answer}",
+            )
+        )
 
-        impacts    = q.branch_impacts.get(answer, {})
+        impacts = q.branch_impacts.get(answer, {})
         eliminated = []
         for bid, delta in impacts.items():
             eliminated.extend(compound.apply_delta(bid, delta))
 
-        events.append(AgentEvent(type=EventType.BRANCH_UPDATE,
-                                  compound=compound, eliminated=eliminated or None))
+        events.append(
+            AgentEvent(
+                type=EventType.BRANCH_UPDATE,
+                compound=compound,
+                eliminated=eliminated or None,
+            )
+        )
 
         if compound.is_converged() or len(compound.branches) == 1:
-            events.append(AgentEvent(type=EventType.TEXT_DELTA,
-                                      content=f"Converged — {compound.top_branch.cause} "
-                                              f"({compound.top_branch.confidence:.0%})"))
+            events.append(
+                AgentEvent(
+                    type=EventType.TEXT_DELTA,
+                    content=f"Converged — {compound.top_branch.cause} "
+                    f"({compound.top_branch.confidence:.0%})",
+                )
+            )
             break
 
     events.append(AgentEvent(type=EventType.COMPOUND_FINDING, compound=compound))
@@ -662,6 +817,7 @@ Return JSON only:
 # ══════════════════════════════════════════════════════════════════
 # Node 6 — RECOMMEND
 # ══════════════════════════════════════════════════════════════════
+
 
 def _recommend_sys(compound: CompoundFinding, ctx: MachineContext) -> str:
     return f"""You are discussing a maintenance finding with a technician.
@@ -683,20 +839,26 @@ Respond concisely. Be specific."""
 
 
 async def recommend_node(state: InvestigationState) -> dict:
-    events   = [AgentEvent(type=EventType.PHASE_CHANGE, phase=Phase.RECOMMEND)]
+    events = [AgentEvent(type=EventType.PHASE_CHANGE, phase=Phase.RECOMMEND)]
     compound = state.compound
-    ctx      = state.machine_context
+    ctx = state.machine_context
     messages = list(state.messages)
 
     while True:
         iid = str(uuid.uuid4())
-        events.append(AgentEvent(type=EventType.INTERRUPT, interrupt_id=iid,
-                                  meta={"phase": Phase.RECOMMEND.value}))
+        events.append(
+            AgentEvent(
+                type=EventType.INTERRUPT,
+                interrupt_id=iid,
+                meta={"phase": Phase.RECOMMEND.value},
+            )
+        )
         user_input = str(interrupt({"interrupt_id": iid}))
         messages.append({"role": "user", "content": user_input})
 
         response = await client.messages.create(
-            model="claude-sonnet-4-6", max_tokens=1000,
+            model="claude-sonnet-4-6",
+            max_tokens=1000,
             system=_recommend_sys(compound, ctx),
             tools=[SUBMIT_FINDING],
             messages=messages,
@@ -715,28 +877,46 @@ async def recommend_node(state: InvestigationState) -> dict:
                     branches=branches,
                     **block.input,
                 )
-                events.append(AgentEvent(type=EventType.COMPOUND_FINDING, compound=compound))
+                events.append(
+                    AgentEvent(type=EventType.COMPOUND_FINDING, compound=compound)
+                )
 
         messages.append({"role": "assistant", "content": acontent})
 
-        last = " ".join(b.get("text","") for b in acontent
-                        if b.get("type") == "text").lower()
-        if any(kw in last for kw in
-               ["approved", "recorded", "finalized", "submitted", "resolution confirmed"]):
+        last = " ".join(
+            b.get("text", "") for b in acontent if b.get("type") == "text"
+        ).lower()
+        if any(
+            kw in last
+            for kw in [
+                "approved",
+                "recorded",
+                "finalized",
+                "submitted",
+                "resolution confirmed",
+            ]
+        ):
             break
 
-    return {"phase": Phase.DONE, "compound": compound,
-            "messages": messages, "_events": events}
+    return {
+        "phase": Phase.DONE,
+        "compound": compound,
+        "messages": messages,
+        "_events": events,
+    }
 
 
 # ══════════════════════════════════════════════════════════════════
 # Routing
 # ══════════════════════════════════════════════════════════════════
 
+
 def _route_validate(state: InvestigationState) -> str:
     p = state.phase
-    if p == Phase.INVESTIGATE:  return "investigate"
-    if p == Phase.HYPOTHESIZE:  return "hypothesize"
+    if p == Phase.INVESTIGATE:
+        return "investigate"
+    if p == Phase.HYPOTHESIZE:
+        return "hypothesize"
     return "discriminate"
 
 
@@ -744,29 +924,34 @@ def _route_validate(state: InvestigationState) -> str:
 # Graph
 # ══════════════════════════════════════════════════════════════════
 
+
 def build_graph():
     g = StateGraph(InvestigationState)
 
     g.add_node("context_gathering", context_gathering_node)
-    g.add_node("investigate",       investigate_node)
-    g.add_node("hypothesize",       hypothesize_node)
-    g.add_node("validate",          validate_node)
-    g.add_node("discriminate",      discriminate_node)
-    g.add_node("recommend",         recommend_node)
+    g.add_node("investigate", investigate_node)
+    g.add_node("hypothesize", hypothesize_node)
+    g.add_node("validate", validate_node)
+    g.add_node("discriminate", discriminate_node)
+    g.add_node("recommend", recommend_node)
 
-    g.add_edge(START,               "context_gathering")
+    g.add_edge(START, "context_gathering")
     g.add_edge("context_gathering", "investigate")
-    g.add_edge("investigate",       "hypothesize")
-    g.add_edge("hypothesize",       "validate")
+    g.add_edge("investigate", "hypothesize")
+    g.add_edge("hypothesize", "validate")
 
-    g.add_conditional_edges("validate", _route_validate, {
-        "discriminate": "discriminate",
-        "investigate":  "investigate",
-        "hypothesize":  "hypothesize",
-    })
+    g.add_conditional_edges(
+        "validate",
+        _route_validate,
+        {
+            "discriminate": "discriminate",
+            "investigate": "investigate",
+            "hypothesize": "hypothesize",
+        },
+    )
 
     g.add_edge("discriminate", "recommend")
-    g.add_edge("recommend",    END)
+    g.add_edge("recommend", END)
 
     return g.compile(checkpointer=checkpointer)
 
@@ -778,17 +963,20 @@ investigation_graph = build_graph()
 # SSE generators
 # ══════════════════════════════════════════════════════════════════
 
+
 async def stream_investigation(
-    session_id: str, machine_id: str,
+    session_id: str,
+    machine_id: str,
     initial_message: str | None = None,
 ) -> AsyncGenerator[str, None]:
     config = {"configurable": {"thread_id": session_id}, "recursion_limit": 60}
     initial = {
-        "machine_id": machine_id, "session_id": session_id,
+        "machine_id": machine_id,
+        "session_id": session_id,
         "phase": Phase.CONTEXT_GATHERING,
-        "messages": [] if not initial_message else [
-            {"role": "user", "content": initial_message}
-        ],
+        "messages": []
+        if not initial_message
+        else [{"role": "user", "content": initial_message}],
     }
     async for chunk in investigation_graph.astream(initial, config=config):
         for _, out in chunk.items():
@@ -798,9 +986,13 @@ async def stream_investigation(
     yield AgentEvent(type=EventType.DONE).to_sse()
 
 
-async def resume_investigation(session_id: str, message: str) -> AsyncGenerator[str, None]:
+async def resume_investigation(
+    session_id: str, message: str
+) -> AsyncGenerator[str, None]:
     config = {"configurable": {"thread_id": session_id}}
-    async for chunk in investigation_graph.astream(Command(resume=message), config=config):
+    async for chunk in investigation_graph.astream(
+        Command(resume=message), config=config
+    ):
         for _, out in chunk.items():
             if isinstance(out, dict):
                 for evt in out.get("_events", []):

@@ -1,4 +1,3 @@
-from core.config import config
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.endpoints import api_router, feedback_router

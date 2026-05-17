@@ -113,7 +113,9 @@ def coordinator_node(state: SupervisorState) -> dict:
 
 def troubleshooting_node(state: SupervisorState, config: RunnableConfig) -> dict:
     parent_tid = config.get("configurable", {}).get("thread_id")
-    tid = state.get("troubleshooting_thread_id") or (f"{parent_tid}_troubleshooting" if parent_tid else str(uuid.uuid4()))
+    tid = state.get("troubleshooting_thread_id") or (
+        f"{parent_tid}_troubleshooting" if parent_tid else str(uuid.uuid4())
+    )
     is_new_session = tid not in _troubleshooting_sessions
     is_first_turn = state.get("troubleshooting_thread_id") is None
 
@@ -160,12 +162,15 @@ def troubleshooting_node(state: SupervisorState, config: RunnableConfig) -> dict
 
 def summarizer_node(state: SupervisorState, config: RunnableConfig) -> dict:
     parent_tid = config.get("configurable", {}).get("thread_id")
-    tid = state.get("summarizer_thread_id") or (f"{parent_tid}_summarizer" if parent_tid else str(uuid.uuid4()))
+    tid = state.get("summarizer_thread_id") or (
+        f"{parent_tid}_summarizer" if parent_tid else str(uuid.uuid4())
+    )
     is_new_session = tid not in _summarizer_sessions
     is_first_turn = state.get("summarizer_thread_id") is None
 
     if is_new_session:
         import re
+
         task = state.get("task")
         period = state.get("period")
         dates = re.findall(r"\d{4}-\d{2}-\d{2}", period or task or "")

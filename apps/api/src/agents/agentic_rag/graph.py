@@ -1,7 +1,7 @@
 from typing import Any, Annotated, List
 from operator import add
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode

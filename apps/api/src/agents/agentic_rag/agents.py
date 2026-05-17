@@ -1,5 +1,3 @@
-from typing import Union
-
 from pydantic import BaseModel, Field
 
 from langchain_openai import ChatOpenAI

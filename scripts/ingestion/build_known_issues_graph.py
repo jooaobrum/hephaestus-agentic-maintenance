@@ -38,9 +38,14 @@ EMBEDDING_SIZE = 1536
 # Data models
 # ---------------------------------------------------------------------------
 
+
 class RootCauseAction(BaseModel):
-    root_cause: str = Field(description="Normalized root cause name (specific, avoid generalist terms).")
-    actions: list[str] = Field(description="Ordered list of corrective actions that resolved this root cause.")
+    root_cause: str = Field(
+        description="Normalized root cause name (specific, avoid generalist terms)."
+    )
+    actions: list[str] = Field(
+        description="Ordered list of corrective actions that resolved this root cause."
+    )
 
 
 class KnownIssue(BaseModel):
@@ -52,11 +57,15 @@ class KnownIssue(BaseModel):
             "Calibrate specificity to cluster size: be more precise for small clusters."
         )
     )
-    description: str = Field(description="2-4 sentence description of the issue pattern.")
+    description: str = Field(
+        description="2-4 sentence description of the issue pattern."
+    )
     root_causes: list[RootCauseAction] = Field(
         description="Main root causes observed in this cluster, each with the actions that resolved them."
     )
-    affected_machines: list[str] = Field(description="Normalized machine IDs impacted (e.g., ['CNC-500', 'CNC-750']).")
+    affected_machines: list[str] = Field(
+        description="Normalized machine IDs impacted (e.g., ['CNC-500', 'CNC-750'])."
+    )
     affected_machine_families: list[str] = Field(
         description="Machine type/family names (e.g., ['CNC Machining Center'])."
     )
@@ -69,7 +78,10 @@ class KnownIssue(BaseModel):
 # Fetch
 # ---------------------------------------------------------------------------
 
-def scroll_all_points(qdrant: QdrantClient, collection: str) -> tuple[list, np.ndarray, list[dict]]:
+
+def scroll_all_points(
+    qdrant: QdrantClient, collection: str
+) -> tuple[list, np.ndarray, list[dict]]:
     ids, vectors, payloads = [], [], []
     offset = None
     while True:
@@ -99,7 +111,10 @@ def scroll_all_points(qdrant: QdrantClient, collection: str) -> tuple[list, np.n
 # Cluster
 # ---------------------------------------------------------------------------
 
-def cluster_embeddings(embeddings: np.ndarray, min_cluster_size: int, min_samples: int) -> np.ndarray:
+
+def cluster_embeddings(
+    embeddings: np.ndarray, min_cluster_size: int, min_samples: int
+) -> np.ndarray:
     reduced = umap.UMAP(
         n_components=10,
         n_neighbors=15,
@@ -119,7 +134,9 @@ def cluster_embeddings(embeddings: np.ndarray, min_cluster_size: int, min_sample
     return clusterer.labels_, clusterer.probabilities_
 
 
-def get_representatives(df_cluster: pd.DataFrame, cluster_embeddings: np.ndarray, top_k: int) -> pd.DataFrame:
+def get_representatives(
+    df_cluster: pd.DataFrame, cluster_embeddings: np.ndarray, top_k: int
+) -> pd.DataFrame:
     centroid = cluster_embeddings.mean(axis=0)
     dists = np.linalg.norm(cluster_embeddings - centroid, axis=1)
     medoid_idx = int(np.argmin(dists))
@@ -150,7 +167,9 @@ Rules:
 """
 
 
-def synthesize_known_issue(reps: pd.DataFrame, cluster_size: int, oai: OpenAI) -> KnownIssue:
+def synthesize_known_issue(
+    reps: pd.DataFrame, cluster_size: int, oai: OpenAI
+) -> KnownIssue:
     lines = ["--- Representative Interventions ---"]
     for _, row in reps.iterrows():
         lines.append(
@@ -158,7 +177,9 @@ def synthesize_known_issue(reps: pd.DataFrame, cluster_size: int, oai: OpenAI) -
             f"Machine: {row.get('machine', 'N/A')}\n"
             f"Summary:\n{row.get('summary', '')}"
         )
-    user_msg = f"Cluster size (total interventions): {cluster_size}\n" + "\n".join(lines)
+    user_msg = f"Cluster size (total interventions): {cluster_size}\n" + "\n".join(
+        lines
+    )
 
     resp = oai.beta.chat.completions.parse(
         model=LLM_MODEL,
@@ -175,6 +196,7 @@ def synthesize_known_issue(reps: pd.DataFrame, cluster_size: int, oai: OpenAI) -
 # Store
 # ---------------------------------------------------------------------------
 
+
 def recreate_collection(qdrant: QdrantClient, name: str) -> None:
     if qdrant.collection_exists(name):
         qdrant.delete_collection(name)
@@ -186,7 +208,9 @@ def recreate_collection(qdrant: QdrantClient, name: str) -> None:
     print(f"Created '{name}' collection.")
 
 
-def upsert_known_issues(qdrant: QdrantClient, issues: dict[int, KnownIssue], collection: str, oai: OpenAI) -> None:
+def upsert_known_issues(
+    qdrant: QdrantClient, issues: dict[int, KnownIssue], collection: str, oai: OpenAI
+) -> None:
     points = []
     now = datetime.utcnow().isoformat()
     for cid, issue in issues.items():
@@ -206,11 +230,14 @@ def upsert_known_issues(qdrant: QdrantClient, issues: dict[int, KnownIssue], col
 # Main
 # ---------------------------------------------------------------------------
 
-def build_known_issues(source_collection: str = "cm_interventions_hybrid", 
-                       output_collection: str = "known_issues", 
-                       qdrant_url: str = "http://localhost:6333", 
-                       min_cluster_size: int = 5, 
-                       top_k_reps: int = 8) -> None:
+
+def build_known_issues(
+    source_collection: str = "cm_interventions_hybrid",
+    output_collection: str = "known_issues",
+    qdrant_url: str = "http://localhost:6333",
+    min_cluster_size: int = 5,
+    top_k_reps: int = 8,
+) -> None:
     oai = OpenAI()
     qdrant = QdrantClient(url=qdrant_url)
 
@@ -257,7 +284,9 @@ def build_known_issues(source_collection: str = "cm_interventions_hybrid",
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build known_issues Qdrant collection from CM interventions.")
+    parser = argparse.ArgumentParser(
+        description="Build known_issues Qdrant collection from CM interventions."
+    )
     parser.add_argument("--source-collection", default="cm_interventions_hybrid")
     parser.add_argument("--output-collection", default="known_issues")
     parser.add_argument("--qdrant-url", default="http://localhost:6333")
@@ -270,10 +299,9 @@ def main() -> None:
         output_collection=args.output_collection,
         qdrant_url=args.qdrant_url,
         min_cluster_size=args.min_cluster_size,
-        top_k_reps=args.top_k_reps
+        top_k_reps=args.top_k_reps,
     )
 
 
 if __name__ == "__main__":
     main()
-
