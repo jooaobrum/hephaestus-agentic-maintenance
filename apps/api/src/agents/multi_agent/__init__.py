@@ -1,3 +1,3 @@
-from agents.multi_agent.graph import run_agent, stream_agent
+from agents.multi_agent.stream import stream_agent
 
-__all__ = ["run_agent", "stream_agent"]
+__all__ = ["stream_agent"]

@@ -46,6 +46,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./apps/api/src:/app/apps/api/src
+      - ./configs:/app/configs
 
   # ── Streamlit App ──────────────────────────────────────────────────────────
   streamlit-app:

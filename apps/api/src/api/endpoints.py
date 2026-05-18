@@ -5,7 +5,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
 from api.models import RAGRequest, FeedbackRequest, FeedbackResponse
-from agents.multi_agent.graph import stream_agent as stream_multiagent_pipeline
+from agents.multi_agent import stream_agent as stream_multiagent_pipeline
 from api.processors.submit_feedback import submit_feedback
 
 logging.basicConfig(

@@ -10,3 +10,9 @@ run-interventions:
 
 run-procedures:
 	uv run python scripts/orchestrate_pipeline.py procedures
+
+run-evals:
+	PYTHONPATH="apps/api/src" uv run python apps/api/evals/eval.py
+
+run-agent-evals:
+	PYTHONPATH="apps/api/src" uv run python apps/api/evals/eval_agents.py

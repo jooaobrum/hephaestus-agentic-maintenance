@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     PG_URL: str = (
         "postgresql://langgraph_user:langgraph_password@localhost:5433/langgraph_db"
     )
+    WORKSPACES_DIR: Path = _ROOT / "configs" / "workspaces"
     model_config = SettingsConfigDict(
         env_file=(_ROOT / ".env", ".env"), env_file_encoding="utf-8", extra="ignore"
     )
