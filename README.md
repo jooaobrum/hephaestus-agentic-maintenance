@@ -2,13 +2,41 @@
 
 Hephaestus is an enterprise-grade, RAG-powered agentic maintenance assistant designed to accelerate Root Cause Analysis (RCA) and institutional knowledge capture for industrial maintenance teams. It combines multi-agent orchestration via **LangGraph**, hybrid retrieval-augmented generation (RAG) in **Qdrant**, real-time sensor integration via a **FastMCP DB Server**, and structured knowledge persistence in **PostgreSQL**.
 
+![Hephaestus pitch](docs/pitch.png)
+
+---
+
+## Demo
+
+### Root Cause Analysis — Troubleshooting Agent
+
+![Troubleshooting agent demo](docs/troubleshooting.gif)
+
+### Historical Analysis — Summarizer Agent
+
+![Summarizer agent demo](docs/summarizer.gif)
+
+---
+
+## Architecture
+
+![System architecture](docs/architecture.png)
+
+The system is a multi-agent supervisor graph:
+
+- **Coordinator** — routes incoming queries to the right specialist
+- **Troubleshooting agent** — iterative RCA loop: gathers evidence, discriminates hypotheses, converges on root cause
+- **Summarizer agent** — retrieves and summarizes past interventions, builds reusable Known Case Templates
+- **FastMCP DB Server** — exposes PostgreSQL sensor data and maintenance records as MCP tools
+- **Qdrant** — hybrid (dense + sparse) retrieval for CM interventions and procedure manuals
+
 ---
 
 ## Tech Stack
 
 | Layer | Technology |
 | :--- | :--- |
-| Agent Orchestration | LangGraph (StateGraph with multi-turn persistence) |
+| Agent Orchestration | LangGraph (multi-agent supervisor with PostgreSQL checkpointer) |
 | Backend API | FastAPI (SSE streaming) |
 | Frontend UI | Streamlit |
 | Vector Database | Qdrant (hybrid sparse + dense via RRF) |
@@ -73,8 +101,6 @@ LANGSMITH_PROJECT="hephaestus-agentic-maintenance"
 
 ## Quickstart
 
-The fastest path from zero to a running assistant:
-
 ```bash
 # 1. Install dependencies
 uv sync
@@ -136,8 +162,6 @@ uv run python scripts/orchestrate_pipeline.py all
 make run-docker-compose
 ```
 
-This builds images and starts all containers in the background.
-
 | Service | Port | URL | Purpose |
 | :--- | :--- | :--- | :--- |
 | Streamlit Chat UI | `8501` | [http://localhost:8501](http://localhost:8501) | Conversational frontend |
@@ -193,6 +217,7 @@ hephaestus-agentic-maintenance/
 ├── scripts/              # Ingestion, parsing, and pipeline orchestration scripts
 ├── notebooks/            # Data exploration, clustering, and evaluation experiments
 ├── data/                 # Source datasets, PDFs, intermediate outputs (gitignored)
+├── docs/                 # Architecture diagrams and demo assets
 ├── docker-compose.yml
 ├── Makefile              # Shortcut commands for common workflows
 └── pyproject.toml        # uv workspace root
