@@ -1,6 +1,6 @@
 # Hephaestus: Agentic Maintenance Assistant
 
-Hephaestus is an enterprise-grade, RAG-powered agentic maintenance assistant designed to accelerate Root Cause Analysis (RCA) and institutional knowledge capture for industrial maintenance teams. It combines multi-agent orchestration via **LangGraph**, hybrid retrieval-augmented generation (RAG) in **Qdrant**, real-time sensor integration via a **FastMCP DB Server**, and structured knowledge persistence in **PostgreSQL**.
+Hephaestus is a multi-agent system built to assist industrial maintenance teams. It guides technicians through Root Cause Analysis (RCA), surfaces relevant procedures and historical interventions, and captures institutional knowledge — all through a conversational interface. Built with **LangGraph**, **Qdrant**, **PostgreSQL**, and **FastMCP**.
 
 ![Hephaestus pitch](docs/pitch.png)
 
