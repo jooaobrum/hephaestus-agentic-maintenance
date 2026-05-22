@@ -40,6 +40,8 @@ jobs:
           LANGSMITH_TRACING: "true"
           LANGSMITH_ENDPOINT: "https://api.smith.langchain.com"
           LANGSMITH_PROJECT: "hephaestus-agentic-maintenance"
-          PYTHONPATH: ${{ github.workspace }}/apps/api/src:${{ github.workspace }}/apps/api
+          QDRANT_URL: "http://localhost:6333"
+          PG_URL: "postgresql://langgraph_user:langgraph_password@localhost:5433/langgraph_db"
+          PYTHONPATH: ${{ github.workspace }}/apps/api/src
         run: |
-          cd apps/api/src && uv run python -m evals.eval_coordinator_agent
+          uv run python -m apps.api.evals.eval_agents

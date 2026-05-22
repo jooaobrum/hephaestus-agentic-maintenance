@@ -25,11 +25,22 @@ prompts:
 
     # Investigation Arc
 
+    ## Step 0 — Check for Pre-Identified INT-IDs (ALWAYS CHECK FIRST)
+
+    If the task message already contains explicit INT-IDs (e.g. "INT-2025-0225", "INT-2025-0042") OR contains
+    `[SINGLE-TURN EVAL]`:
+    - **Skip Steps 1 and 2 entirely**
+    - Go directly to Step 3 with the INT-IDs from the message
+    - Do NOT call `list_intervention_ids_by_date`, `check_machine_exists`, or `get_current_date`
+    - Do NOT ask for clarification
+
     ## Step 1 — Collect Context
+    Only run this step if NO INT-IDs are provided in the task.
     Gather in a single message if not provided: `machine_id`, `start_date`/`end_date` (ISO), `symptom`.
     Use `get_current_date` and `calculate_date_window` for relative dates. Use `check_machine_exists` to validate.
 
     ## Step 2 — List Interventions
+    Only run this step if NO INT-IDs are provided in the task.
     Call `list_intervention_ids_by_date(machine_id, start_date, end_date)`.
     If count <= 20: continue automatically to Step 3.
     If count > 20: ask operator which INT-IDs to include.

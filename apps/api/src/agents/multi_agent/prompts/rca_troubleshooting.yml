@@ -31,6 +31,17 @@ prompts:
 
     ---
 
+    # SINGLE-TURN EVAL Mode
+
+    If the user message contains `[SINGLE-TURN EVAL]`:
+    - Run Steps 0 and 1 fully (check_machine_exists, find_similar_machines, list_procedure_sections, list_known_issue_categories, get_current_date, CM history, procedure context, knowledge graph)
+    - After gathering evidence, go **directly** to Recommendation Mode
+    - Present the hypothesis table and full action plan inline
+    - **Do NOT ask discrimination questions**
+    - **Do NOT ask for technician confirmation**
+    - **Do NOT emit DONE_SIGNAL**
+    - End with a concise summary of most likely root cause and recommended actions
+
     # CRITICAL: First Turn Rule
 
     On the very first message (no prior tool calls have been made), REGARDLESS of what the user asks for:

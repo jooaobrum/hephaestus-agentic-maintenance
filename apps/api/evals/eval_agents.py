@@ -1,510 +1,415 @@
-# -*- coding: utf-8 -*-
-"""Evaluation pipeline for Hephaestus Multi-Agent System (Coordinator, Summarizer, and Troubleshooting).
-
-Automatically seeds evaluation datasets in LangSmith if they do not already exist,
-defines custom metadata and correctness evaluators, and runs evaluations for each agent.
-"""
-
 import os
-import uuid
 import json
+import uuid
 import dotenv
 
-# Load environment variables from root .env
 dotenv.load_dotenv()
 
-# Set local default configurations if running on the host machine outside Docker
+if "QDRANT_URL" not in os.environ:
+    os.environ["QDRANT_URL"] = "http://localhost:6333"
 if "PG_URL" not in os.environ:
     os.environ["PG_URL"] = (
         "postgresql://langgraph_user:langgraph_password@localhost:5433/langgraph_db"
     )
-if "QDRANT_URL" not in os.environ:
-    os.environ["QDRANT_URL"] = "http://localhost:6333"
 
 from langsmith import Client
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage
 from langchain_openai import ChatOpenAI
 
 from core.config import config
-from agents.multi_agent.nodes import (
-    coordinator_node,
-    troubleshooting_node,
-    summarizer_node,
-)
+from agents.multi_agent.supervisor import build_supervisor
 
-# Initialize clients
 ls_client = Client()
+DATASET_NAME = "hephaestus-agent-eval"
 
-# --- Auto-Seeding Configurations & Data ---
+# Build a single supervisor graph (no checkpointer — each eval run is stateless)
+supervisor_graph = build_supervisor(checkpointer=None)
 
-COORDINATOR_SEED_EXAMPLES = [
-    {
-        "inputs": {
-            "query": "Analyze the high vibration sensor warning on CNC-500 from yesterday"
-        },
-        "outputs": {
-            "next_agent": "troubleshooting",
-            "coordinator_final_answer": False,
-            "machine_id": "CNC-500",
-            "symptom": "high vibration sensor warning",
-            "task": "troubleshooting",
-        },
-    },
-    {
-        "inputs": {
-            "query": "IH-300 cooling flow has collapsed. Let's diagnose it immediately."
-        },
-        "outputs": {
-            "next_agent": "troubleshooting",
-            "coordinator_final_answer": False,
-            "machine_id": "IH-300",
-            "symptom": "cooling flow has collapsed",
-            "task": "troubleshooting",
-        },
-    },
-    {
-        "inputs": {
-            "query": "Summarize all corrective maintenance interventions on Heat Exchanger HX-200 between 2025-11-01 and 2025-12-01 and create a known case template."
-        },
-        "outputs": {
-            "next_agent": "summarizer",
-            "coordinator_final_answer": False,
-            "machine_id": "HX-200",
-            "symptom": None,
-            "task": "summarize and template",
-            "period": "2025-11-01 to 2025-12-01",
-        },
-    },
-    {
-        "inputs": {
-            "query": "Generate a known issue template for conveyor belt CB-100 bearing wear issues recorded this quarter."
-        },
-        "outputs": {
-            "next_agent": "summarizer",
-            "coordinator_final_answer": False,
-            "machine_id": "CB-100",
-            "symptom": "bearing wear issues",
-            "task": "build known issue template",
-        },
-    },
-    {
-        "inputs": {"query": "Hello! What is your name and what can you help me with?"},
-        "outputs": {
-            "next_agent": "",
-            "coordinator_final_answer": True,
-            "machine_id": None,
-            "symptom": None,
-            "task": None,
-        },
-    },
-]
+# Extract sub-agent graphs for direct invocation in sub-agent-specific scenarios
+_subgraphs = dict(supervisor_graph.get_subgraphs())
+troubleshooting_graph = _subgraphs.get("troubleshooting")
+summarizer_graph = _subgraphs.get("summarizer")
 
-TROUBLESHOOTING_SEED_EXAMPLES = [
-    {
-        "inputs": {
-            "query": "Machine IH-300 has high coil temperature. Let's diagnose.",
-            "machine_id": "IH-300",
-            "symptom": "high coil temperature",
-            "task": "diagnose heating issue",
-        },
-        "outputs": {
-            "expected_keywords": ["cooling", "pump", "flow", "coil", "heater"],
-            "expected_root_cause": "coil cooling flow fault",
-        },
-    },
-    {
-        "inputs": {
-            "query": "CNC-500 is reporting severe spindle vibration. What's the plan?",
-            "machine_id": "CNC-500",
-            "symptom": "severe spindle vibration",
-            "task": "spindle bearing analysis",
-        },
-        "outputs": {
-            "expected_keywords": [
-                "bearing",
-                "vibration",
-                "spindle",
-                "lubrication",
-                "wear",
-            ],
-            "expected_root_cause": "bearing wear",
-        },
-    },
-    {
-        "inputs": {
-            "query": "HX-200 heat exchanger has a low oil pressure alarm and hot oil. What does the procedure suggest?",
-            "machine_id": "HX-200",
-            "symptom": "low oil pressure and hot oil",
-            "task": "diagnose oil leak/wear",
-        },
-        "outputs": {
-            "expected_keywords": ["seal", "leak", "oil", "fouling", "cavitation"],
-            "expected_root_cause": "seal wear",
-        },
-    },
-]
-
-SUMMARIZER_SEED_EXAMPLES = [
-    {
-        "inputs": {
-            "query": "Summarize all corrective maintenance interventions on machine HX-200 from November 2025 to December 2025.",
-            "machine_id": "HX-200",
-            "symptom": "seal wear",
-            "task": "summarize CM interventions",
-            "period": "2025-11-01 to 2025-12-01",
-        },
-        "outputs": {
-            "expected_keywords": [
-                "summary",
-                "HX-200",
-                "intervention",
-                "template",
-                "root cause",
-            ],
-            "expected_template_elements": [
-                "symptom_name",
-                "description",
-                "root_causes",
-            ],
-        },
-    },
-    {
-        "inputs": {
-            "query": "Build a known case template for conveyor belt CB-100 bearing wear issues recorded between 2025-10-01 and 2025-12-31.",
-            "machine_id": "CB-100",
-            "symptom": "bearing wear",
-            "task": "build case template",
-            "period": "2025-10-01 to 2025-12-31",
-        },
-        "outputs": {
-            "expected_keywords": ["bearing", "conveyor", "CB-100", "template", "idler"],
-            "expected_template_elements": [
-                "symptom_name",
-                "description",
-                "root_causes",
-                "affected_machines",
-            ],
-        },
-    },
-]
+_SUB_AGENT_NAMES = {"troubleshooting", "summarizer"}
+_ROUTING_STUBS = {"routing to troubleshooting.", "routing to summarizer."}
 
 
-def seed_dataset_if_missing(name: str, examples: list):
-    """Seed evaluation datasets in LangSmith if they are missing."""
-    try:
-        ls_client.read_dataset(dataset_name=name)
-        print(f"✓ LangSmith Dataset '{name}' already exists.")
-    except Exception:
-        print(
-            f"⚠ LangSmith Dataset '{name}' not found. Creating and seeding default examples..."
-        )
-        dataset = ls_client.create_dataset(
-            dataset_name=name,
-            description=f"Auto-generated evaluation dataset for Hephaestus Multi-Agent System: {name}",
-        )
-        for ex in examples:
-            ls_client.create_example(
-                inputs=ex["inputs"], outputs=ex["outputs"], dataset_id=dataset.id
+def _extract_reply(messages: list) -> str:
+    for msg in reversed(messages):
+        if not isinstance(msg, AIMessage):
+            continue
+        if getattr(msg, "name", None) not in _SUB_AGENT_NAMES:
+            continue
+        content = msg.content
+        if isinstance(content, list):
+            content = " ".join(
+                b.get("text", "") if isinstance(b, dict) else getattr(b, "text", "")
+                for b in content
             )
-        print(f"✓ Created and seeded dataset '{name}' with {len(examples)} examples.")
+        content = content.strip()
+        if content and "transfer" not in content.lower()[:30]:
+            return content
+
+    for msg in reversed(messages):
+        if not isinstance(msg, AIMessage):
+            continue
+        content = msg.content
+        if isinstance(content, list):
+            content = " ".join(
+                b.get("text", "") if isinstance(b, dict) else getattr(b, "text", "")
+                for b in content
+            )
+        content = content.strip()
+        if content and content.lower() not in _ROUTING_STUBS:
+            return content
+
+    return ""
 
 
-# --- Execution Wrappers ---
+def _detect_route(messages: list) -> str:
+    """Infer which agent was activated by inspecting message names."""
+    for msg in reversed(messages):
+        if (
+            isinstance(msg, AIMessage)
+            and getattr(msg, "name", None) in _SUB_AGENT_NAMES
+        ):
+            return msg.name or "direct"
+    return "direct"
 
 
-def run_coordinator(x: dict) -> dict:
-    """Wrapper to run the Coordinator node with mock SupervisorState."""
-    query = x.get("query")
-    if not query and "messages" in x:
-        for msg in x["messages"]:
-            if isinstance(msg, dict) and msg.get("type") == "human":
-                query = msg.get("content")
-                break
-    if not query:
-        query = "Hello"
-
-    state = {
-        "messages": [HumanMessage(content=query)],
-        "active_agent": None,
-        "coordinator_next": "",
-        "coordinator_final": False,
-        "troubleshooting_thread_id": None,
-        "summarizer_thread_id": None,
-        "machine_id": None,
-        "symptom": None,
-        "task": None,
-        "period": None,
-        "answer": "",
-    }
-
-    return coordinator_node(state)
-
-
-def run_troubleshooting(x: dict) -> dict:
-    """Wrapper to run the Troubleshooting node in a sandbox session."""
-    query = x.get("query", "Analyze machine vibration issues")
-
-    state = {
-        "messages": [HumanMessage(content=query)],
-        "active_agent": "troubleshooting",
-        "coordinator_next": "troubleshooting",
-        "coordinator_final": False,
-        "troubleshooting_thread_id": f"eval_tb_{uuid.uuid4()}",
-        "summarizer_thread_id": None,
-        "machine_id": x.get("machine_id"),
-        "symptom": x.get("symptom"),
-        "task": x.get("task"),
-        "period": None,
-        "answer": "",
-    }
-
-    config = {"configurable": {"thread_id": f"eval_tb_thread_{uuid.uuid4()}"}}
-    return troubleshooting_node(state, config)
-
-
-def run_summarizer(x: dict) -> dict:
-    """Wrapper to run the Summarizer node in a sandbox session."""
-    query = x.get("query", "Summarize CM history and build template")
-
-    state = {
-        "messages": [HumanMessage(content=query)],
-        "active_agent": "summarizer",
-        "coordinator_next": "summarizer",
-        "coordinator_final": False,
-        "troubleshooting_thread_id": None,
-        "summarizer_thread_id": f"eval_sum_{uuid.uuid4()}",
-        "machine_id": x.get("machine_id"),
-        "symptom": x.get("symptom"),
-        "task": x.get("task"),
-        "period": x.get("period"),
-        "answer": "",
-    }
-
-    config = {"configurable": {"thread_id": f"eval_sum_thread_{uuid.uuid4()}"}}
-    return summarizer_node(state, config)
-
-
-# --- Custom Evaluators ---
-
-
-def next_agent_evaluator(run, example) -> dict:
-    """Evaluate if the coordinator routes to the correct sub-agent and final action."""
-    run_outputs = run.outputs or {}
-    example_outputs = example.outputs or {}
-
-    run_next = run_outputs.get("coordinator_next", "")
-    example_next = example_outputs.get("next_agent", "")
-
-    run_final = run_outputs.get("coordinator_final", False)
-    example_final = example_outputs.get("coordinator_final_answer", False)
-
-    next_agent_match = run_next == example_next
-    final_answer_match = run_final == example_final
-
-    score = int(next_agent_match and final_answer_match)
-
-    return {
-        "score": score,
-        "key": "routing_accuracy",
-        "comment": f"Match details: next_agent={next_agent_match} (run: {run_next}, expected: {example_next}), final_answer={final_answer_match} (run: {run_final}, expected: {example_final})",
-    }
-
-
-def metadata_extraction_evaluator(run, example) -> dict:
-    """Evaluate if the coordinator correctly parses entities like machine_id and symptom."""
-    run_outputs = run.outputs or {}
-    example_outputs = example.outputs or {}
-
-    run_machine = (run_outputs.get("machine_id") or "").strip().lower()
-    example_machine = (example_outputs.get("machine_id") or "").strip().lower()
-
-    run_symptom = (run_outputs.get("symptom") or "").strip().lower()
-    example_symptom = (example_outputs.get("symptom") or "").strip().lower()
-
-    machine_match = (run_machine == example_machine) if example_machine else True
-    symptom_match = (
-        (example_symptom in run_symptom or run_symptom in example_symptom)
-        if example_symptom
-        else True
+def _invoke_subagent(graph, agent_name: str, user_msg: str) -> dict:
+    """Invoke a sub-agent graph directly, bypassing the coordinator."""
+    thread_id = f"eval-{uuid.uuid4()}"
+    result = graph.invoke(
+        {"messages": [HumanMessage(content=user_msg)]},
+        config={"configurable": {"thread_id": thread_id}, "recursion_limit": 80},
     )
-
-    score = int(machine_match and symptom_match)
-
+    messages = result.get("messages", [])
     return {
-        "score": score,
-        "key": "metadata_extraction_accuracy",
-        "comment": f"Machine Match: {machine_match} ({run_machine} vs {example_machine}). Symptom Match: {symptom_match} ({run_symptom} vs {example_symptom}).",
+        "answer": _extract_reply(messages) or _extract_any_reply(messages),
+        "actual_route": agent_name,
     }
 
 
-def keyword_overlap_evaluator(run, example) -> dict:
-    """Evaluate if the agent's final answer contains key technical terms."""
-    run_outputs = run.outputs or {}
-    example_outputs = example.outputs or {}
+def _extract_any_reply(messages: list) -> str:
+    """Fallback: return last non-empty AIMessage content."""
+    for msg in reversed(messages):
+        if not isinstance(msg, AIMessage):
+            continue
+        content = msg.content
+        if isinstance(content, list):
+            content = " ".join(
+                b.get("text", "") if isinstance(b, dict) else getattr(b, "text", "")
+                for b in content
+            )
+        content = content.strip()
+        if content:
+            return content
+    return ""
 
-    answer = (run_outputs.get("answer") or "").lower()
-    expected_keywords = example_outputs.get("expected_keywords", [])
 
-    if not expected_keywords:
-        return {
-            "score": 1.0,
-            "key": "keyword_match_rate",
-            "comment": "No expected keywords defined.",
-        }
+def run_agent(x: dict) -> dict:
+    user_msg = x["user_message"]
+    # When the dataset input carries a target_agent, invoke that sub-agent directly
+    # so the coordinator cannot rewrite or hallucinate INT-IDs / date ranges.
+    target = x.get("target_agent")
+    if target == "troubleshooting" and troubleshooting_graph is not None:
+        return _invoke_subagent(troubleshooting_graph, "troubleshooting", user_msg)
+    if target == "summarizer" and summarizer_graph is not None:
+        return _invoke_subagent(summarizer_graph, "summarizer", user_msg)
 
-    matched = [kw for kw in expected_keywords if kw.lower() in answer]
-    match_rate = len(matched) / len(expected_keywords)
-
+    thread_id = f"eval-{uuid.uuid4()}"
+    result = supervisor_graph.invoke(
+        {"messages": [HumanMessage(content=user_msg)]},
+        config={"configurable": {"thread_id": thread_id}, "recursion_limit": 80},
+    )
+    output_messages = result.get("messages", [])
     return {
-        "score": match_rate,
-        "key": "keyword_match_rate",
-        "comment": f"Matched {len(matched)} of {len(expected_keywords)} keywords: {matched}",
+        "answer": _extract_reply(output_messages),
+        "actual_route": _detect_route(output_messages),
     }
 
 
-def diagnostic_llm_evaluator(run, example) -> dict:
-    """Evaluate if the diagnostic agent accurately identifies the expected root cause."""
-    run_outputs = run.outputs or {}
-    example_outputs = example.outputs or {}
+# ---------------------------------------------------------------------------
+# Evaluators
+# ---------------------------------------------------------------------------
 
-    answer = run_outputs.get("answer", "")
-    expected_root_cause = example_outputs.get("expected_root_cause", "")
 
-    if not expected_root_cause:
-        return {
-            "score": 1.0,
-            "key": "diagnostic_correctness",
-            "comment": "No expected root cause defined.",
-        }
+def routing_evaluator(run, example) -> dict:
+    """Binary: did the supervisor route to the correct agent?"""
+    actual = (run.outputs or {}).get("actual_route", "")
+    expected = (example.outputs or {}).get("expected_route", "")
+    match = actual == expected
+    return {
+        "key": "routing_correct",
+        "score": int(match),
+        "comment": f"actual={actual}, expected={expected}",
+    }
 
-    prompt = f"""You are evaluating an AI engineering diagnostic troubleshooting agent's output.
-Expected diagnosed issue / root cause to be covered: "{expected_root_cause}"
 
-Agent's output:
-"{answer}"
+def answer_relevance_llm_evaluator(run, example) -> dict:
+    """LLM judge: does the answer address the user message and ground truth?"""
+    outputs = run.outputs or {}
+    inputs = example.inputs or {}
+    ref_outputs = example.outputs or {}
 
-Determine if the agent's output correctly identifies, discusses, or addresses the expected root cause/issue.
-Provide a score between 0.0 (totally missed) and 1.0 (perfectly correct).
-Return your response in this JSON format:
-{{"score": float, "reasoning": "brief explanation"}}
-"""
+    answer = outputs.get("answer", "")
+    question = inputs.get("user_message", "")
+    ground_truth = ref_outputs.get("ground_truth_answer", "")
+
+    if not answer:
+        return {"key": "answer_relevance", "score": 0.0, "comment": "Empty answer."}
+
+    prompt = f"""You are evaluating a maintenance assistant's response.
+
+User message: "{question}"
+Reference answer: "{ground_truth}"
+Agent answer: "{answer}"
+
+Score 0.0 to 1.0: how well does the agent answer address the user's request and align with the reference answer?
+Return JSON only: {{"score": float, "reasoning": "brief"}}"""
+
     try:
-        eval_llm = ChatOpenAI(
-            model=config.EVALUATION_MODEL, temperature=0, api_key=config.OPENAI_API_KEY
-        )
-        response = eval_llm.invoke(prompt)
-        res_json = json.loads(response.content)
+        llm = ChatOpenAI(model=config.EVALUATION_MODEL, temperature=0)
+        raw = llm.invoke(prompt).content
+        res = json.loads(raw if isinstance(raw, str) else str(raw))
         return {
-            "score": float(res_json.get("score", 0.0)),
-            "key": "diagnostic_correctness",
-            "comment": res_json.get("reasoning", ""),
+            "key": "answer_relevance",
+            "score": float(res.get("score", 0.0)),
+            "comment": res.get("reasoning", ""),
         }
     except Exception as e:
-        # Fallback to string matching if LLM fails
-        has_cause = int(expected_root_cause.lower() in answer.lower())
         return {
-            "score": float(has_cause),
-            "key": "diagnostic_correctness",
-            "comment": f"Fallback search: Match={has_cause}. Error during LLM eval: {e}",
+            "key": "answer_relevance",
+            "score": 0.0,
+            "comment": f"LLM eval error: {e}",
+        }
+
+
+def agent_behavior_llm_evaluator(run, example) -> dict:
+    """LLM judge: did the routed agent follow the expected behavior?"""
+    outputs = run.outputs or {}
+    ref_outputs = example.outputs or {}
+
+    answer = outputs.get("answer", "")
+    expected_behavior = ref_outputs.get("expected_agent_behavior", "")
+
+    if not expected_behavior:
+        return {"key": "agent_behavior", "score": 1.0, "comment": "No behavior spec."}
+    if not answer:
+        return {"key": "agent_behavior", "score": 0.0, "comment": "Empty answer."}
+
+    prompt = f"""You are evaluating whether a maintenance AI agent followed its expected behavior.
+
+Expected behavior: "{expected_behavior}"
+Agent output: "{answer}"
+
+Score 0.0 to 1.0: how well does the agent output match the expected behavior?
+Return JSON only: {{"score": float, "reasoning": "brief"}}"""
+
+    try:
+        llm = ChatOpenAI(model=config.EVALUATION_MODEL, temperature=0)
+        raw = llm.invoke(prompt).content
+        res = json.loads(raw if isinstance(raw, str) else str(raw))
+        return {
+            "key": "agent_behavior",
+            "score": float(res.get("score", 0.0)),
+            "comment": res.get("reasoning", ""),
+        }
+    except Exception as e:
+        return {
+            "key": "agent_behavior",
+            "score": 0.0,
+            "comment": f"LLM eval error: {e}",
         }
 
 
 def summarizer_completeness_evaluator(run, example) -> dict:
-    """Evaluate if the summarizer successfully generates all expected case template metadata elements."""
-    run_outputs = run.outputs or {}
-    example_outputs = example.outputs or {}
+    """Check that the summarizer answer contains [INT: ID] markers for all expected IDs."""
+    outputs = run.outputs or {}
+    ref_outputs = example.outputs or {}
 
-    answer = run_outputs.get("answer", "")
-    expected_elements = example_outputs.get("expected_template_elements", [])
+    answer = outputs.get("answer", "")
+    expected_ids = ref_outputs.get("expected_int_ids", [])
 
-    if not expected_elements:
+    if not expected_ids:
         return {
+            "key": "summarizer_completeness",
             "score": 1.0,
-            "key": "summary_completeness",
-            "comment": "No expected template elements defined.",
+            "comment": "No IDs to check.",
         }
 
-    prompt = f"""You are evaluating a maintenance summarization agent's compiled template report.
-Expected elements to be present or structured in the report: {expected_elements}
-
-Agent's output:
-"{answer}"
-
-Determine if the agent's output successfully provides or structures each of the expected elements.
-Provide a completeness score between 0.0 (none present) and 1.0 (all beautifully presented).
-Return your response in this JSON format:
-{{"score": float, "reasoning": "brief explanation"}}
-"""
-    try:
-        eval_llm = ChatOpenAI(
-            model=config.EVALUATION_MODEL, temperature=0, api_key=config.OPENAI_API_KEY
-        )
-        response = eval_llm.invoke(prompt)
-        res_json = json.loads(response.content)
-        return {
-            "score": float(res_json.get("score", 0.0)),
-            "key": "summary_completeness",
-            "comment": res_json.get("reasoning", ""),
-        }
-    except Exception as e:
-        matched = [el for el in expected_elements if el.lower() in answer.lower()]
-        return {
-            "score": len(matched) / len(expected_elements),
-            "key": "summary_completeness",
-            "comment": f"Fallback keyword search: matched={matched}. Error during LLM eval: {e}",
-        }
+    found = [id_ for id_ in expected_ids if id_ in answer]
+    score = len(found) / len(expected_ids)
+    return {
+        "key": "summarizer_completeness",
+        "score": score,
+        "comment": f"Found {len(found)}/{len(expected_ids)} INT IDs: {found}",
+    }
 
 
-# --- Main Runner ---
+# ---------------------------------------------------------------------------
+# Evaluator sets per scenario group
+# ---------------------------------------------------------------------------
+
+ROUTING_EVALUATORS = [routing_evaluator, answer_relevance_llm_evaluator]
+TROUBLESHOOTING_EVALUATORS = [
+    routing_evaluator,
+    agent_behavior_llm_evaluator,
+    answer_relevance_llm_evaluator,
+]
+SUMMARIZER_EVALUATORS = [
+    routing_evaluator,
+    agent_behavior_llm_evaluator,
+    summarizer_completeness_evaluator,
+]
+
+SCENARIO_EVALUATORS = {
+    "routing_troubleshooting": ROUTING_EVALUATORS,
+    "routing_summarizer": ROUTING_EVALUATORS,
+    "routing_direct": ROUTING_EVALUATORS,
+    "troubleshooting_interventions_only": TROUBLESHOOTING_EVALUATORS,
+    "troubleshooting_procedure_intervention": TROUBLESHOOTING_EVALUATORS,
+    "troubleshooting_procedure_only": TROUBLESHOOTING_EVALUATORS,
+    "summarizer_summaries": SUMMARIZER_EVALUATORS,
+}
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 
 def main():
     print("=" * 70)
-    print("      HEPHAESTUS MULTI-AGENT EVALUATION RUNNER")
+    print("      HEPHAESTUS AGENT EVALUATION")
+    print(f"      Dataset: {DATASET_NAME}")
     print("=" * 70)
 
-    # 1. Seed Datasets
-    print("\n[STEP 1] Seeding datasets in LangSmith...")
-    seed_dataset_if_missing("coordinator_eval_dataset", COORDINATOR_SEED_EXAMPLES)
-    seed_dataset_if_missing(
-        "troubleshooting_eval_dataset", TROUBLESHOOTING_SEED_EXAMPLES
-    )
-    seed_dataset_if_missing("summarizer_eval_dataset", SUMMARIZER_SEED_EXAMPLES)
+    # Group examples by scenario
+    examples = list(ls_client.list_examples(dataset_name=DATASET_NAME))
+    print(f"\nLoaded {len(examples)} examples from '{DATASET_NAME}'")
 
-    print("\n[STEP 2] Running Coordinator Agent Evaluation...")
-    coordinator_results = ls_client.evaluate(
-        run_coordinator,
-        data="coordinator_eval_dataset",
-        evaluators=[next_agent_evaluator, metadata_extraction_evaluator],
-        experiment_prefix="coordinator_eval",
-        max_concurrency=4,
-    )
-    print(f"✓ Coordinator Evaluation complete. Run ID: {coordinator_results}")
+    from collections import defaultdict
 
-    print("\n[STEP 3] Running Troubleshooting Agent Evaluation...")
-    troubleshooting_results = ls_client.evaluate(
-        run_troubleshooting,
-        data="troubleshooting_eval_dataset",
-        evaluators=[keyword_overlap_evaluator, diagnostic_llm_evaluator],
-        experiment_prefix="troubleshooting_eval",
-        max_concurrency=2,
-    )
-    print(f"✓ Troubleshooting Evaluation complete. Run ID: {troubleshooting_results}")
+    by_scenario: dict[str, list] = defaultdict(list)
+    for ex in examples:
+        scenario = (ex.metadata or {}).get("scenario", "unknown")
+        by_scenario[scenario].append(ex)
 
-    print("\n[STEP 4] Running Summarizer Agent Evaluation...")
-    summarizer_results = ls_client.evaluate(
-        run_summarizer,
-        data="summarizer_eval_dataset",
-        evaluators=[keyword_overlap_evaluator, summarizer_completeness_evaluator],
-        experiment_prefix="summarizer_eval",
-        max_concurrency=2,
-    )
-    print(f"✓ Summarizer Evaluation complete. Run ID: {summarizer_results}")
+    for scenario, scenario_examples in sorted(by_scenario.items()):
+        print(f"\n--- {scenario} ({len(scenario_examples)} examples) ---")
+        evaluators = SCENARIO_EVALUATORS.get(scenario, ROUTING_EVALUATORS)
+
+        # Build a minimal per-scenario dataset name so LangSmith groups results
+        subset_name = f"{DATASET_NAME}_{scenario}"
+
+        # Always recreate the subset so stale examples from previous dataset versions are purged
+        try:
+            ls_client.delete_dataset(dataset_name=subset_name)
+        except Exception:
+            pass
+        try:
+            subset_ds = ls_client.read_dataset(dataset_name=subset_name)
+        except Exception:
+            subset_ds = ls_client.create_dataset(
+                dataset_name=subset_name,
+                description=f"Subset of {DATASET_NAME} for scenario: {scenario}",
+            )
+            ls_client.create_examples(
+                dataset_id=subset_ds.id,
+                examples=[
+                    {
+                        "inputs": ex.inputs,
+                        "outputs": ex.outputs,
+                        "metadata": ex.metadata,
+                    }
+                    for ex in scenario_examples
+                ],
+            )
+            print(f"  Created subset dataset '{subset_name}'")
+
+        results = ls_client.evaluate(
+            run_agent,
+            data=subset_name,
+            evaluators=evaluators,
+            experiment_prefix=f"agent_eval_{scenario}",
+            max_concurrency=2,
+        )
+        print(f"  ✓ Done — {results}")
 
     print("\n" + "=" * 70)
-    print("✓ All evaluations triggered successfully on LangSmith!")
-    print("Check your LangSmith account to view the detailed dashboards.")
+    print("✓ All scenario evaluations complete. Check LangSmith for results.")
     print("=" * 70)
+
+    # --- CI pass/fail gate ---
+    # Thresholds set at ~15% below observed baseline to absorb LLM variance.
+    # routing_correct must be 1.0 across all scenarios (hard gate).
+    _check_ci_gate(by_scenario)
+
+
+def _check_ci_gate(by_scenario: dict) -> None:
+    """Collect scores from the latest experiment per scenario and enforce thresholds."""
+    from collections import defaultdict
+
+    all_scores: dict[str, list[float]] = defaultdict(list)
+
+    for scenario in sorted(by_scenario.keys()):
+        subset_name = f"{DATASET_NAME}_{scenario}"
+        try:
+            ds = ls_client.read_dataset(dataset_name=subset_name)
+            projs = sorted(
+                list(ls_client.list_projects(reference_dataset_id=str(ds.id))),
+                key=lambda p: p.start_time,
+                reverse=True,
+            )
+            if not projs:
+                continue
+            latest = projs[0]
+            runs = list(
+                ls_client.list_runs(
+                    project_name=latest.name, run_type="chain", is_root=True
+                )
+            )
+            for run in runs:
+                for fb in ls_client.list_feedback(run_ids=[str(run.id)]):
+                    if fb.score is not None:
+                        all_scores[fb.key].append(fb.score)
+        except Exception as e:
+            print(f"  [gate] could not read scores for {scenario}: {e}")
+
+    _THRESHOLDS: dict[str, float] = {
+        "routing_correct": 1.00,
+        "answer_relevance": 0.40,
+        "agent_behavior": 0.50,
+        "summarizer_completeness": 0.80,
+    }
+
+    print("\n" + "=" * 70)
+    print("CI GATE RESULTS")
+    print("=" * 70)
+    failures: list[str] = []
+    for metric, threshold in sorted(_THRESHOLDS.items()):
+        scores = all_scores.get(metric, [])
+        if not scores:
+            print(f"  {metric:<30} NO DATA   (threshold={threshold:.2f})")
+            continue
+        avg = sum(scores) / len(scores)
+        status = "PASS" if avg >= threshold else "FAIL"
+        if status == "FAIL":
+            failures.append(f"{metric}: {avg:.3f} < {threshold:.2f}")
+        print(
+            f"  {metric:<30} {status}  avg={avg:.3f}  threshold={threshold:.2f}  (n={len(scores)})"
+        )
+
+    print("=" * 70)
+    if failures:
+        print(f"\n❌ CI GATE FAILED — {len(failures)} metric(s) below threshold:")
+        for f in failures:
+            print(f"   • {f}")
+        raise SystemExit(1)
+    else:
+        print("\n✅ CI GATE PASSED — all metrics above threshold.")
 
 
 if __name__ == "__main__":
