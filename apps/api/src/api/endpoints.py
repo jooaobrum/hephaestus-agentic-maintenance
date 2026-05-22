@@ -1,16 +1,12 @@
 import json
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
-from api.models import RAGRequest, FeedbackRequest, FeedbackResponse
 from agents.multi_agent import stream_agent as stream_multiagent_pipeline
+from api.models import FeedbackRequest, FeedbackResponse, StreamRequest
 from api.processors.submit_feedback import submit_feedback
-
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
 
 logger = logging.getLogger(__name__)
 
@@ -18,10 +14,7 @@ feedback_router = APIRouter()
 
 
 @feedback_router.post("/")
-def send_feedback(request: Request, payload: FeedbackRequest) -> FeedbackResponse:
-    """
-    Endpoint to handle chat requests.
-    """
+def send_feedback(payload: FeedbackRequest) -> FeedbackResponse:
     logger.info("Received a feedback request.")
     status, message = submit_feedback(
         payload.trace_id, payload.feedback_value, payload.feedback_text
@@ -35,15 +28,15 @@ multiagent_router = APIRouter()
 
 
 @multiagent_router.post("/stream")
-async def multiagent_stream(request: Request, payload: RAGRequest):
-    """
-    SSE streaming endpoint for the multi-agent pipeline.
-    """
+async def multiagent_stream(payload: StreamRequest):
     logger.info("Received a multi-agent streaming chat request.")
 
     async def event_generator():
         async for event in stream_multiagent_pipeline(
-            query=payload.query, thread_id=payload.thread_id
+            query=payload.query,
+            thread_id=payload.thread_id,
+            workspace_id=payload.workspace_id,
+            mode=payload.mode,
         ):
             yield f"data: {json.dumps(event)}\n\n"
         yield "data: [DONE]\n\n"

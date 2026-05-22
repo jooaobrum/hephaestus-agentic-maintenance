@@ -1,0 +1,85 @@
+# Hephaestus configuration — single source of truth for non-secret values.
+# Secrets (API keys, DB credentials) live in .env.
+
+models:
+  generation: gpt-5.1
+  fallback: gpt-4o-mini
+  embedding: text-embedding-3-small
+  keyword: bm25
+  reranking: rerank-v4.0-pro
+  evaluation: gpt-5.4-mini
+
+llm:
+  temperature: 0
+  timeout_seconds: 90
+  max_retries: 2
+  streaming: true
+
+qdrant:
+  collections:
+    cm_interventions: cm_interventions_hybrid
+    procedures: procedures_hybrid
+    known_issues: known_issues
+
+database:
+  schema: maintenance
+  tables:
+    known_case_templates: known_case_templates
+    confirmed_rca_cases: confirmed_rca_cases
+    sensor_catalog: sensor_catalog
+    sensor_readings: sensor_readings
+    interventions: interventions
+    remaining_life: remaining_life
+
+retrieval:
+  default_top_k: 5
+  default_top_n: 20
+  procedures_top_k: 10
+  known_issues_search_limit: 200
+  known_issues_scroll_limit: 500
+  similar_machines_limit: 3
+  rrf_weights:
+    cm: [1, 1]
+    procedures: [0.7, 1.3]
+
+agents:
+  default_workspace_id: ws_test_001
+  recursion_limit: 80
+  answer_dedup_key_length: 120
+  transfer_message_scan_length: 30
+
+sse:
+  node_status:
+    supervisor: "Coordinator is routing..."
+    troubleshooting: "Troubleshooting agent is working..."
+    summarizer: "Summarizer agent is working..."
+  token_nodes:
+    - troubleshooting
+    - summarizer
+    - supervisor
+  answer_nodes:
+    - troubleshooting
+    - summarizer
+    - supervisor
+
+source_refs:
+  intervention_prefix: "INT-"
+  procedure_prefix: "PROC_REF"
+
+sensors:
+  status_warning: WARNING
+  status_critical: CRITICAL
+  default_days_span: 30
+  date_window_labels: [7, 14, 30]
+
+paths:
+  workspaces_dir: configs/workspaces
+  prompts_subdir: prompts
+  registry_subdir: registry
+
+ui:
+  feedback_timeout_seconds: 5
+  stream_timeout_seconds: 120
+
+evaluation:
+  dataset_name: rag-evaluation-dataset

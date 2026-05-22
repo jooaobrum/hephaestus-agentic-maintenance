@@ -24,6 +24,7 @@ allowed_tools:
   - get_sensor_anomaly_summary
   - get_remaining_life_tool
   - save_confirmed_rca_case
+  - get_confirmed_rca_cases
   - summarize_intervention
   - build_known_case_template
   - save_known_case_template

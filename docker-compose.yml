@@ -64,6 +64,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./apps/chatbot_ui:/app/apps/chatbot_ui
+      - ./configs:/app/configs
 
   # ── Postgres ──────────────────────────────────────────────────────────
   postgres:

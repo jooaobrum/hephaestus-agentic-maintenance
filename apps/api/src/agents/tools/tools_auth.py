@@ -1,32 +1,41 @@
-# -*- coding: utf-8 -*-
-from langchain_core.tools import tool
+import logging
 from datetime import datetime, timedelta
-from qdrant_client import models
 import json
 import uuid
 
-from openai import OpenAI
-from qdrant_client import QdrantClient
-from sqlalchemy import create_engine, text
-from pydantic import BaseModel, Field
-from langchain_openai import ChatOpenAI
 import pandas as pd
-from agents.core.auth import authorize_tool
+from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
 from langgraph.prebuilt.tool_node import ToolRuntime
-from core.config import config
+from openai import OpenAI
+from pydantic import BaseModel, Field
+from qdrant_client import QdrantClient, models
+from sqlalchemy import create_engine, text
 
-PG_URL = config.PG_URL.replace("postgresql://", "postgresql+psycopg://")
+from agents.core.auth import authorize_tool
+from core.config import app, secrets
+
+logger = logging.getLogger(__name__)
+
+PG_URL = secrets.PG_URL.replace("postgresql://", "postgresql+psycopg://")
 pg_engine = create_engine(PG_URL)
 
 OPENAI_CLIENT = OpenAI()
-QDRANT_CLIENT = QdrantClient(url=config.QDRANT_URL)
+QDRANT_CLIENT = QdrantClient(url=secrets.QDRANT_URL)
 
-# Models & Collections
-CM_COLLECTION = "cm_interventions_hybrid"
-PROC_COLLECTION = "procedures_hybrid"
-EMBEDDING_MODEL = "text-embedding-3-small"
-KEYWORD_MODEL = "bm25"
-GENERATION_MODEL = "gpt-5.4-nano"
+CM_COLLECTION = app.qdrant.collections.cm_interventions
+PROC_COLLECTION = app.qdrant.collections.procedures
+KNOWN_ISSUES_COLLECTION = app.qdrant.collections.known_issues
+EMBEDDING_MODEL = app.models.embedding
+KEYWORD_MODEL = app.models.keyword
+GENERATION_MODEL = app.models.generation
+
+T_KNOWN_CASES = app.database.qualified("known_case_templates")
+T_CONFIRMED_RCA = app.database.qualified("confirmed_rca_cases")
+T_SENSOR_CATALOG = app.database.qualified("sensor_catalog")
+T_SENSOR_READINGS = app.database.qualified("sensor_readings")
+T_INTERVENTIONS = app.database.qualified("interventions")
+T_REMAINING_LIFE = app.database.qualified("remaining_life")
 
 
 # =========================================================
@@ -84,8 +93,8 @@ _llm_known_issue = _llm.with_structured_output(KnownIssue)
 
 
 def _initialize_known_case_templates_table():
-    create_table_query = text("""
-        CREATE TABLE IF NOT EXISTS maintenance.known_case_templates (
+    create_table_query = text(f"""
+        CREATE TABLE IF NOT EXISTS {T_KNOWN_CASES} (
             template_id UUID PRIMARY KEY,
             symptom_name VARCHAR(255) NOT NULL,
             description TEXT,
@@ -106,12 +115,12 @@ def _initialize_known_case_templates_table():
             conn.execute(create_table_query)
             conn.commit()
     except Exception as e:
-        print(f"Table initialization error (may already exist): {e}")
+        logger.warning("Could not initialize %s: %s", T_KNOWN_CASES, e)
 
 
 def _initialize_confirmed_rca_cases_table():
-    create_table_query = text("""
-        CREATE TABLE IF NOT EXISTS maintenance.confirmed_rca_cases (
+    create_table_query = text(f"""
+        CREATE TABLE IF NOT EXISTS {T_CONFIRMED_RCA} (
             case_id UUID PRIMARY KEY,
             machine VARCHAR(100),
             symptom VARCHAR(255),
@@ -119,7 +128,9 @@ def _initialize_confirmed_rca_cases_table():
             actual_root_cause TEXT,
             investigation_steps TEXT,
             diagnosis_accuracy BOOLEAN,
-            created_at TIMESTAMP
+            created_at TIMESTAMP,
+            rejected_hypotheses JSONB DEFAULT '[]',
+            investigation_notes TEXT
         )
     """)
     try:
@@ -127,7 +138,7 @@ def _initialize_confirmed_rca_cases_table():
             conn.execute(create_table_query)
             conn.commit()
     except Exception as e:
-        print(f"Table initialization error (may already exist): {e}")
+        logger.warning("Could not initialize %s: %s", T_CONFIRMED_RCA, e)
 
 
 _initialize_known_case_templates_table()
@@ -291,7 +302,7 @@ def _expand_chunk_window(results: list[dict]) -> list[dict]:
 
 
 def get_sensor_catalog(machine: str) -> str:
-    query = text("""
+    query = text(f"""
         SELECT
             sensor_id,
             tag,
@@ -302,7 +313,7 @@ def get_sensor_catalog(machine: str) -> str:
             warn_hi,
             fault_correlation,
             active
-        FROM maintenance.sensor_catalog
+        FROM {T_SENSOR_CATALOG}
         WHERE machine = :machine
         ORDER BY tag
     """)
@@ -327,7 +338,7 @@ def get_sensor_readings(
     tag: str | None = None,
 ) -> str:
     if tag:
-        query = text("""
+        query = text(f"""
             SELECT
                 timestamp,
                 tag,
@@ -337,7 +348,7 @@ def get_sensor_readings(
                 status,
                 warn_lo,
                 warn_hi
-            FROM maintenance.sensor_readings
+            FROM {T_SENSOR_READINGS}
             WHERE machine = :machine
               AND tag = :tag
               AND timestamp >= :start_date
@@ -353,7 +364,7 @@ def get_sensor_readings(
         }
 
     else:
-        query = text("""
+        query = text(f"""
             SELECT
                 timestamp,
                 tag,
@@ -363,7 +374,7 @@ def get_sensor_readings(
                 status,
                 warn_lo,
                 warn_hi
-            FROM maintenance.sensor_readings
+            FROM {T_SENSOR_READINGS}
             WHERE machine = :machine
               AND timestamp >= :start_date
               AND timestamp <= :end_date
@@ -399,7 +410,7 @@ def get_sensor_timeline(
     end_date: str,
     tag: str,
 ) -> str:
-    query = text("""
+    query = text(f"""
         SELECT
             timestamp,
             tag,
@@ -409,7 +420,7 @@ def get_sensor_timeline(
             status,
             warn_lo,
             warn_hi
-        FROM maintenance.sensor_readings
+        FROM {T_SENSOR_READINGS}
         WHERE machine = :machine
           AND tag = :tag
           AND timestamp >= :start_date
@@ -478,7 +489,7 @@ def get_threshold_events(
     timestamp_start: str,
     timestamp_end: str,
 ) -> str:
-    query = text("""
+    query = text(f"""
         SELECT
             timestamp,
             tag,
@@ -488,7 +499,7 @@ def get_threshold_events(
             status,
             warn_lo,
             warn_hi
-        FROM maintenance.sensor_readings
+        FROM {T_SENSOR_READINGS}
         WHERE machine = :machine
           AND timestamp >= :timestamp_start
           AND timestamp <= :timestamp_end
@@ -522,7 +533,7 @@ def get_threshold_events(
 
 
 def get_remaining_life(machine: str) -> str:
-    query = text("""
+    query = text(f"""
         SELECT
             component_id,
             component_name,
@@ -534,7 +545,7 @@ def get_remaining_life(machine: str) -> str:
             last_inspection,
             next_inspection,
             notes
-        FROM maintenance.remaining_life
+        FROM {T_REMAINING_LIFE}
         WHERE machine = :machine
         ORDER BY remaining_pct ASC
     """)
@@ -771,25 +782,9 @@ def _retrieve_procedures(
 def _validate_machine_access_auth(
     machine: str, machine_type: str | None, mandatory_filters: dict | None
 ) -> str | None:
-    """Validate machine access against workspace filters. Returns error if unauthorized, None if authorized."""
-    # Use passed filters, or fall back to context variable
-    filters = mandatory_filters
-    if not filters:
-        try:
-            from agents.core.auth import get_workspace_context
-            from agents.utils.workspace import load_workspace
-
-            workspace_id = get_workspace_context()
-            if workspace_id:
-                workspace = load_workspace(workspace_id)
-                filters = getattr(workspace, "filters", {})
-        except (ImportError, AttributeError):
-            pass
-
-    if not filters:
+    if not mandatory_filters:
         return None
-
-    filter_type = filters.get("machine_type")
+    filter_type = mandatory_filters.get("machine_type")
     if filter_type and machine_type and machine_type != filter_type:
         return f"✗ Access denied: Machine '{machine}' is a {machine_type}, but workspace is restricted to {filter_type}."
     return None
@@ -819,13 +814,13 @@ def check_machine_exists(
     - or error message if not found
     """
 
-    query = text("""
+    query = text(f"""
         SELECT machine,
                machine_type,
                COUNT(*) as intervention_count,
                MIN(date_start) as first_intervention,
                MAX(date_start) as last_intervention
-        FROM maintenance.interventions
+        FROM {T_INTERVENTIONS}
         WHERE machine = :machine
         GROUP BY machine, machine_type
     """)
@@ -846,9 +841,9 @@ def check_machine_exists(
         if auth_error:
             return auth_error
 
-        peers_query = text("""
+        peers_query = text(f"""
             SELECT DISTINCT machine
-            FROM maintenance.interventions
+            FROM {T_INTERVENTIONS}
             WHERE machine_type = :machine_type
               AND machine != :machine
             ORDER BY machine
@@ -884,9 +879,9 @@ def check_machine_exists(
             f"{peers_str}"
         )
 
-    query_sensors = text("""
+    query_sensors = text(f"""
         SELECT DISTINCT machine
-        FROM maintenance.sensor_catalog
+        FROM {T_SENSOR_CATALOG}
         WHERE machine = :machine
         LIMIT 1
     """)
@@ -921,9 +916,9 @@ def list_available_machines(
     Alphabetically sorted list of machine IDs.
     """
 
-    query = text("""
+    query = text(f"""
         SELECT DISTINCT machine
-        FROM maintenance.interventions
+        FROM {T_INTERVENTIONS}
         ORDER BY machine
     """)
 
@@ -1082,7 +1077,7 @@ def list_known_issue_categories(
 
     try:
         points, _ = QDRANT_CLIENT.scroll(
-            collection_name="known_issues",
+            collection_name=KNOWN_ISSUES_COLLECTION,
             limit=200,
             with_payload=True,
         )
@@ -1382,7 +1377,7 @@ def find_similar_machines(
 
     try:
         points, _ = QDRANT_CLIENT.scroll(
-            collection_name="known_issues",
+            collection_name=KNOWN_ISSUES_COLLECTION,
             limit=500,
             with_payload=True,
         )
@@ -1626,12 +1621,12 @@ def _get_intervention_detail_impl(intervention_id: str) -> str:
         else f"INT-{intervention_id}"
     )
 
-    query = text("""
+    query = text(f"""
         SELECT
             id, machine, machine_type, date_start, date_end, duration_min,
             fault_description, intervention_type, severity, technician,
             supervisor, subsystem, fault_code, comments
-        FROM maintenance.interventions
+        FROM {T_INTERVENTIONS}
         WHERE id = :intervention_id
     """)
 
@@ -1758,7 +1753,7 @@ def query_known_issues_graph(
     )
 
     search_result = QDRANT_CLIENT.query_points(
-        collection_name="known_issues",
+        collection_name=KNOWN_ISSUES_COLLECTION,
         query=query_vector,
         query_filter=query_filter,
         limit=3,
@@ -1883,7 +1878,7 @@ def get_fleet_impact_for_symptom(
 
     try:
         search_result = QDRANT_CLIENT.query_points(
-            collection_name="known_issues",
+            collection_name=KNOWN_ISSUES_COLLECTION,
             query=query_vector,
             using=EMBEDDING_MODEL,
             limit=3,
@@ -1935,7 +1930,7 @@ def get_sensor_anomaly_summary(
 
     Returns: summary table of top sensors by severity, with first breach timestamp.
     """
-    query = text("""
+    query = text(f"""
         SELECT
             tag,
             sensor_name,
@@ -1947,7 +1942,7 @@ def get_sensor_anomaly_summary(
             ROUND(AVG(value)::numeric, 2) as avg_value,
             warn_lo,
             warn_hi
-        FROM maintenance.sensor_readings
+        FROM {T_SENSOR_READINGS}
         WHERE machine = :machine
           AND timestamp >= :start_date
           AND timestamp <= :end_date
@@ -2029,7 +2024,7 @@ def get_known_case_templates(
                 template_id, symptom_name, description, root_causes,
                 affected_machines, representative_intervention_ids,
                 created_at, created_by_agent
-            FROM maintenance.known_case_templates
+            FROM {T_KNOWN_CASES}
             WHERE {where_clause}
             ORDER BY created_at DESC
             LIMIT :limit
@@ -2073,6 +2068,8 @@ def save_confirmed_rca_case(
     actual_root_cause: str,
     investigation_steps: str,
     diagnosis_accuracy: bool,
+    rejected_hypotheses: list[dict] | None = None,
+    investigation_notes: str | None = None,
     mandatory_filters: dict | None = None,
     runtime: ToolRuntime = None,
 ) -> dict:
@@ -2088,6 +2085,11 @@ def save_confirmed_rca_case(
         actual_root_cause: What operator confirmed was the real cause
         investigation_steps: Summary of steps taken
         diagnosis_accuracy: True if diagnosed == actual, False if operator corrected
+        rejected_hypotheses: List of hypotheses eliminated during investigation.
+            Each entry must be a dict with keys 'hypothesis' (str) and 'reason_rejected' (str).
+            Derived from the hypothesis table rows that were ruled out.
+        investigation_notes: Free-text capture of non-hypothesis context — technician
+            observations, environmental factors, or any other relevant notes.
 
     Returns: dict with case_id and confirmation.
     """
@@ -2095,13 +2097,15 @@ def save_confirmed_rca_case(
         case_id = str(uuid.uuid4())
         now = datetime.utcnow().isoformat()
 
-        insert_query = text("""
-            INSERT INTO maintenance.confirmed_rca_cases (
+        insert_query = text(f"""
+            INSERT INTO {T_CONFIRMED_RCA} (
                 case_id, machine, symptom, diagnosed_root_cause,
-                actual_root_cause, investigation_steps, diagnosis_accuracy, created_at
+                actual_root_cause, investigation_steps, diagnosis_accuracy, created_at,
+                rejected_hypotheses, investigation_notes
             ) VALUES (
                 :case_id, :machine, :symptom, :diagnosed_root_cause,
-                :actual_root_cause, :investigation_steps, :diagnosis_accuracy, :created_at
+                :actual_root_cause, :investigation_steps, :diagnosis_accuracy, :created_at,
+                :rejected_hypotheses, :investigation_notes
             )
         """)
 
@@ -2114,6 +2118,8 @@ def save_confirmed_rca_case(
             "investigation_steps": investigation_steps,
             "diagnosis_accuracy": diagnosis_accuracy,
             "created_at": now,
+            "rejected_hypotheses": json.dumps(rejected_hypotheses or []),
+            "investigation_notes": investigation_notes,
         }
 
         with pg_engine.connect() as conn:
@@ -2131,6 +2137,99 @@ def save_confirmed_rca_case(
 
     except Exception as e:
         return {"status": "error", "message": f"Failed to save RCA case: {str(e)}"}
+
+
+@tool
+@authorize_tool("get_confirmed_rca_cases")
+def get_confirmed_rca_cases(
+    machine: str | None = None,
+    symptom: str | None = None,
+    include_rejected_hypotheses: bool = True,
+    limit: int = 5,
+    mandatory_filters: dict | None = None,
+    runtime: ToolRuntime = None,
+) -> str:
+    """
+    Retrieve confirmed RCA cases from the database, optionally including rejected hypotheses.
+
+    Use during Step 1 (Broad Evidence Gathering) to surface prior confirmed diagnoses for
+    the same machine or symptom. The rejected_hypotheses field shows what was ruled out and
+    why — use it to avoid repeating dead ends from previous investigations.
+
+    Args:
+        machine: Filter by machine ID (e.g., 'HX-200'). Optional.
+        symptom: Filter by symptom text (partial match). Optional.
+        include_rejected_hypotheses: When True, include the list of ruled-out hypotheses
+            and their reasons. Default True.
+        limit: Maximum number of cases to return. Default 5.
+
+    Returns:
+        Formatted string of confirmed cases with root causes and, if requested, rejected hypotheses.
+    """
+    try:
+        conditions = []
+        params: dict = {"limit": limit}
+
+        if machine:
+            conditions.append("machine = :machine")
+            params["machine"] = machine
+        if symptom:
+            conditions.append("symptom ILIKE :symptom")
+            params["symptom"] = f"%{symptom}%"
+
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+        query = text(f"""
+            SELECT case_id, machine, symptom, diagnosed_root_cause, actual_root_cause,
+                   investigation_steps, diagnosis_accuracy, created_at,
+                   rejected_hypotheses, investigation_notes
+            FROM {T_CONFIRMED_RCA}
+            {where_clause}
+            ORDER BY created_at DESC
+            LIMIT :limit
+        """)
+
+        with pg_engine.connect() as conn:
+            rows = conn.execute(query, params).mappings().all()
+
+        if not rows:
+            return "No confirmed RCA cases found for the given filters."
+
+        output = f"**Confirmed RCA Cases** ({len(rows)} found)\n\n"
+        for row in rows:
+            accuracy_flag = (
+                "✓ Correct" if row["diagnosis_accuracy"] else "⚠ Corrected by operator"
+            )
+            output += (
+                f"[CONFIRMED CASE: {row['case_id']}]\n"
+                f"Machine: {row['machine']} | Symptom: {row['symptom']}\n"
+                f"Diagnosed root cause: {row['diagnosed_root_cause']}\n"
+                f"Actual root cause: {row['actual_root_cause']} ({accuracy_flag})\n"
+                f"Investigation steps: {row['investigation_steps']}\n"
+                f"Date: {row['created_at']}\n"
+            )
+
+            if include_rejected_hypotheses:
+                rejected = row["rejected_hypotheses"] or []
+                if isinstance(rejected, str):
+                    rejected = json.loads(rejected)
+                if rejected:
+                    output += "Rejected hypotheses:\n"
+                    for rh in rejected:
+                        output += f"  - {rh.get('hypothesis', 'N/A')}: {rh.get('reason_rejected', 'N/A')}\n"
+                else:
+                    output += "Rejected hypotheses: none recorded\n"
+
+            notes = row["investigation_notes"]
+            if notes:
+                output += f"Investigation notes: {notes}\n"
+
+            output += "-" * 40 + "\n"
+
+        return output
+
+    except Exception as e:
+        return f"Error retrieving confirmed RCA cases: {str(e)}"
 
 
 @tool
@@ -2285,8 +2384,8 @@ def save_known_case_template(
                     i.strip() for i in representative_intervention_ids.split(",")
                 ]
 
-        insert_query = text("""
-            INSERT INTO maintenance.known_case_templates (
+        insert_query = text(f"""
+            INSERT INTO {T_KNOWN_CASES} (
                 template_id, symptom_name, description, root_causes,
                 affected_machines, affected_machine_families,
                 representative_intervention_ids, created_at, created_by_agent,
@@ -2358,9 +2457,9 @@ def list_intervention_ids_by_date(
 
     Returns: List of intervention IDs sorted chronologically with their dates.
     """
-    query = text("""
+    query = text(f"""
         SELECT id, date_start
-        FROM maintenance.interventions
+        FROM {T_INTERVENTIONS}
         WHERE machine = :machine
           AND date_start >= :start_date
           AND date_start <= :end_date

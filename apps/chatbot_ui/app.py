@@ -1,8 +1,16 @@
 import json
 import os
+import uuid
+from pathlib import Path
+
 import requests
 import streamlit as st
-import uuid
+import yaml
+
+_CONFIG_PATH = Path(__file__).resolve().parents[2] / "configs" / "config.yml"
+_config = yaml.safe_load(_CONFIG_PATH.read_text())
+FEEDBACK_TIMEOUT = _config["ui"]["feedback_timeout_seconds"]
+STREAM_TIMEOUT = _config["ui"]["stream_timeout_seconds"]
 
 API_URL = os.getenv("API_URL", "http://localhost:8000/multiagent/")
 STREAM_URL = API_URL.rstrip("/") + "/stream"
@@ -43,7 +51,7 @@ def submit_fb(trace_id, value, text=""):
         requests.post(
             FEEDBACK_URL,
             json={"trace_id": trace_id, "feedback_value": value, "feedback_text": text},
-            timeout=5,
+            timeout=FEEDBACK_TIMEOUT,
         )
         st.toast("Feedback received!")
     except Exception as e:
@@ -166,7 +174,7 @@ if prompt:
                     with requests.post(
                         STREAM_URL,
                         json={"query": prompt, "thread_id": THREAD_ID},
-                        timeout=120,
+                        timeout=STREAM_TIMEOUT,
                         stream=True,
                     ) as response:
                         response.raise_for_status()
@@ -184,9 +192,8 @@ if prompt:
                             evt = event.get("event")
                             if evt == "status":
                                 st.write(event["data"])
-                            elif evt == "tool_calls":
-                                for t in event["data"]:
-                                    st.write(f"🔧 {t}")
+                            elif evt == "reasoning":
+                                st.write(f"💭 {event['data']}")
                             elif evt == "token":
                                 answer += event["data"]
                                 answer_placeholder.markdown(answer + "▌")

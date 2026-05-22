@@ -1,29 +1,13 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+
+from core.config import app
 
 
-class RAGRequest(BaseModel):
+class StreamRequest(BaseModel):
     query: str
     thread_id: str
-
-
-class UsedReference(BaseModel):
-    source_type: str = Field(
-        description="Type of source: 'intervention', 'procedure', 'sensor', or 'component_life'"
-    )
-    id: str = Field(
-        description="Identifier — intervention ID (e.g. INT-2023-0070), procedure section, sensor tag, or component ID"
-    )
-    machine: str = Field(default="", description="Machine ID (e.g. HX-200)")
-    detail: str = Field(
-        default="",
-        description="Short summary: intervention summary, procedure title, sensor reading, or component condition",
-    )
-
-
-class RAGResponse(BaseModel):
-    answer: str
-    references: list[UsedReference] = []
-    trace_id: str
+    workspace_id: str = app.agents.default_workspace_id
+    mode: str = "auto"
 
 
 class FeedbackRequest(BaseModel):
